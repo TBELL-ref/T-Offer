@@ -136,8 +136,19 @@ async function load() {
     $("#status").textContent = "준비됨";
   } catch (err) {
     console.error(err);
-    $("#status").textContent = "로드 실패 — 034 마이그레이션·RPC 확인";
-    $("#leadList").innerHTML = `<div class="empty error">${escapeHtml(err.message)}</div>`;
+    const msg = `${err.message ?? err}`;
+    const missingRpc = /get_offer_published_snapshot|PGRST202|schema cache/i.test(msg);
+    $("#status").textContent = missingRpc
+      ? "DB 미준비 — 034_offer_schema.sql 을 Supabase SQL Editor에서 실행하세요"
+      : "로드 실패";
+    $("#leadList").innerHTML = missingRpc
+      ? `<div class="empty error">
+          <strong>offer RPC가 아직 없습니다.</strong><br />
+          Supabase → SQL Editor →
+          <code>supabase/migrations/034_offer_schema.sql</code>
+          전체를 실행한 뒤 새로고침하세요.
+        </div>`
+      : `<div class="empty error">${escapeHtml(msg)}</div>`;
   }
 }
 
