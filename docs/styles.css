@@ -60,6 +60,30 @@ body {
   white-space: nowrap;
 }
 
+.workspace-nav {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: #e8ebee;
+  border-radius: 8px;
+}
+.workspace-nav button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.workspace-nav button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;

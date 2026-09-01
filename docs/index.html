@@ -12,7 +12,11 @@
     <header class="site-header">
       <div class="header-start">
         <a class="brand" href="./">T-Offer</a>
-        <nav class="tabs" aria-label="보드">
+        <nav class="workspace-nav" aria-label="보기">
+          <button type="button" data-view="companies" class="active">회사</button>
+          <button type="button" data-view="posts">공고</button>
+        </nav>
+        <nav class="tabs" id="stageTabs" aria-label="단계">
           <button type="button" data-tab="new" class="active">신규 <span data-count="new">0</span></button>
           <button type="button" data-tab="recommended">추천 <span data-count="recommended">0</span></button>
           <button type="button" data-tab="mail_ready">메일대기 <span data-count="mail_ready">0</span></button>
@@ -35,12 +39,12 @@
     </div>
 
     <div class="table-wrap">
-      <table class="leads-table" aria-label="Offer 리드">
+      <table class="leads-table" id="companyTable" aria-label="Offer 회사">
         <thead>
           <tr>
             <th class="col-grade">등급</th>
             <th class="col-co">회사</th>
-            <th class="col-post">근거 공고</th>
+            <th class="col-post">최근 공고</th>
             <th class="col-src">소스</th>
             <th class="col-stage">단계</th>
             <th class="col-mail">메일</th>
@@ -48,6 +52,17 @@
           </tr>
         </thead>
         <tbody id="leadBody"></tbody>
+      </table>
+      <table class="leads-table hidden" id="postsTable" aria-label="Offer 공고">
+        <thead>
+          <tr>
+            <th class="col-co">회사</th>
+            <th class="col-post">공고 제목</th>
+            <th class="col-src">소스</th>
+            <th class="col-stage">수집</th>
+          </tr>
+        </thead>
+        <tbody id="postsBody"></tbody>
       </table>
       <div id="empty" class="empty hidden"></div>
     </div>
