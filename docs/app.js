@@ -28,7 +28,7 @@ const SOURCE_LABELS = {
 const state = {
   view: "companies",
   tab: "new",
-  empFilter: "alba",
+  empFilter: "all",
   postFilter: "open",
   companies: [],
   posts: [],
@@ -93,17 +93,23 @@ function offerPosts() {
   return (state.posts || []).filter((p) => (p.classify_label || p.classifyLabel || "offer") === "offer");
 }
 
+/** Same rule as Offer classifier isAlbaBoardSource + explicit 알바/아르바이트 labels. */
 function isAlbaPost(p) {
   const src = `${p.source || ""}`.toLowerCase();
+  const url = `${p.url || ""}`;
   if (src === "albamon" || src === "albaheaven") return true;
+  if (src === "google" && /albamon\.com|alba\.co\.kr/i.test(url)) return true;
   const emp = `${p.employment_type || p.employmentType || ""}`;
-  if (/알바|아르바이트|파트|시급|일급|단기|시간제/i.test(emp)) return true;
-  if (Number(p.part_time_score ?? p.partTimeScore ?? 0) >= 1) return true;
+  if (/알바|아르바이트/i.test(emp)) return true;
+  const title = `${p.title || ""}`;
+  if (/알바|아르바이트/i.test(title)) return true;
   return false;
 }
 
 function matchesEmpFilter(p) {
+  // 전체 = Offer board 전체 (T-Client 전체와 같이 필터 없이)
   if (state.empFilter === "all") return true;
+  // 알바 = 수집기에서 알바 채널/알바로 잡은 공고만
   return isAlbaPost(p);
 }
 
@@ -117,8 +123,10 @@ function companyHasVisiblePost(c) {
   if (isExcluded(c) && state.tab === "excluded") return true;
   const id = c.company_id || c.companyId;
   const posts = offerPosts().filter((p) => (p.company_id || p.companyId) === id);
-  if (!posts.length) return state.empFilter === "all";
-  return posts.some(matchesEmpFilter);
+  // 전체: 공고 없어도 회사 행 유지 (Client 전체와 동일)
+  if (state.empFilter === "all") return true;
+  // 알바: 알바 공고가 하나라도 있는 회사만
+  return posts.some(isAlbaPost);
 }
 
 function sourceOfCompany(c) {
@@ -472,9 +480,10 @@ function updateCounts() {
     const el = document.querySelector(`[data-post-count="${k}"]`);
     if (el) el.textContent = String(v);
   }
+  // emp tab counts: 전체 = Offer 공고 전부, 알바 = 알바 분류만
   const empBuckets = {
-    alba: posts.filter(isAlbaPost).length,
-    all: posts.length
+    all: posts.length,
+    alba: posts.filter(isAlbaPost).length
   };
   for (const [k, v] of Object.entries(empBuckets)) {
     const el = document.querySelector(`[data-emp-count="${k}"]`);
