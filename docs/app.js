@@ -42,7 +42,7 @@ const state = {
   allCompanies: [],
   posts: [],
   clientRows: [],
-  clientPosts: null,
+  clientPosts: [],
   edits: {},
   offerMgmt: {},
   albaTags: new Set(),
@@ -107,25 +107,26 @@ function displayName(c) {
 
 function companyName(id) {
   const c =
-    state.companies.find((x) => x.company_id === id || x.companyId === id) ||
-    state.offerCompanies.find((x) => x.company_id === id) ||
-    state.allCompanies.find((x) => x.company_id === id);
+    (state.companies || []).find((x) => x.company_id === id || x.companyId === id) ||
+    (state.offerCompanies || []).find((x) => x.company_id === id) ||
+    (state.allCompanies || []).find((x) => x.company_id === id);
   if (c) return displayName(c);
-  const edit = state.edits[id];
+  const edit = state.edits?.[id];
   return edit?.companyNameKo || id || "—";
 }
 
 function findCompany(id) {
   return (
-    state.companies.find((x) => x.company_id === id) ||
-    state.offerCompanies.find((x) => x.company_id === id) ||
-    state.allCompanies.find((x) => x.company_id === id) ||
+    (state.companies || []).find((x) => x.company_id === id) ||
+    (state.offerCompanies || []).find((x) => x.company_id === id) ||
+    (state.allCompanies || []).find((x) => x.company_id === id) ||
     null
   );
 }
 
 function syncCompanyEverywhere(companyId, mutator) {
   for (const list of [state.companies, state.offerCompanies, state.allCompanies]) {
+    if (!Array.isArray(list)) continue;
     const c = list.find((x) => x.company_id === companyId);
     if (c) mutator(c);
   }
@@ -366,7 +367,7 @@ function flattenClientPosts(rows) {
 }
 
 function sourceOfCompany(c) {
-  const post = state.posts.find(
+  const post = (state.posts || []).find(
     (p) =>
       p.company_id === c.company_id ||
       p.companyId === c.company_id ||
@@ -388,13 +389,15 @@ function postsForCompany(c) {
       collected_at: p.collectedAt || p.collected_at || ""
     }));
   }
-  return state.clientPosts.filter((p) => p.company_id === id);
+  return (state.clientPosts || []).filter((p) => p.company_id === id);
 }
 
 function latestPostForCompany(c) {
   const id = c.company_id || c.companyId;
   const url = c.latest_offer_url || c.latestOfferUrl || "";
-  const byUrl = state.posts.find((p) => p.url === url) || state.clientPosts.find((p) => p.url === url);
+  const byUrl =
+    (state.posts || []).find((p) => p.url === url) ||
+    (state.clientPosts || []).find((p) => p.url === url);
   if (byUrl) return byUrl;
   const list = postsForCompany(c);
   const open = list.find((p) => !isClosedPost(p));
