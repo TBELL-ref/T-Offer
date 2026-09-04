@@ -25,21 +25,28 @@ const SOURCE_LABELS = {
   fixture: "fixture"
 };
 
+const PAGE_SIZE = 50;
+const ALBA_LS_KEY = "toffer-alba-tags-v1";
+
 const state = {
   view: "companies",
   tab: "new",
   empFilter: "alba",
   postFilter: "open",
+  page: 1,
   /** Active list for current emp tab */
   companies: [],
-  /** Offer leads only (알바 소스) */
+  /** Offer leads only */
   offerCompanies: [],
   /** T-Client universe (전체) */
   allCompanies: [],
   posts: [],
-  clientPosts: [],
+  clientRows: [],
+  clientPosts: null,
   edits: {},
   offerMgmt: {},
+  albaTags: new Set(),
+  albaDenied: new Set(),
   query: "",
   userEmail: "",
   busyId: "",
@@ -47,6 +54,24 @@ const state = {
   passwordSetup: false,
   generatedAt: ""
 };
+
+function loadAlbaTagState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ALBA_LS_KEY) || "{}");
+    state.albaTags = new Set(raw.tagged || []);
+    state.albaDenied = new Set(raw.denied || []);
+  } catch {
+    state.albaTags = new Set();
+    state.albaDenied = new Set();
+  }
+}
+
+function persistAlbaTagState() {
+  localStorage.setItem(
+    ALBA_LS_KEY,
+    JSON.stringify({ tagged: [...state.albaTags], denied: [...state.albaDenied] })
+  );
+}
 
 function $(sel) {
   return document.querySelector(sel);
@@ -150,27 +175,72 @@ function matchesPostFilter(p) {
 }
 
 function listViewPosts() {
-  if (state.empFilter === "all" && state.clientPosts.length) {
+  if (state.empFilter === "all") {
+    if (!state.clientPosts) state.clientPosts = flattenClientPosts(state.clientRows);
     return state.clientPosts;
   }
-  return offerPosts().filter((p) => (state.empFilter === "all" ? true : isAlbaPost(p)));
+  return offerPosts().filter(isAlbaPost);
 }
 
 function companyHasVisiblePost(c) {
   if (isExcluded(c) && state.tab === "excluded") return true;
-  // 전체 = T-Client 회사 전부 (공고 유무 무관)
   if (state.empFilter === "all") return true;
+  return isInAlbaPool(c);
+}
+
+function hasAlbaPost(c) {
   const id = c.company_id || c.companyId;
-  const posts = offerPosts().filter((p) => (p.company_id || p.companyId) === id);
-  return posts.some(isAlbaPost);
+  return offerPosts().some((p) => (p.company_id || p.companyId) === id && isAlbaPost(p));
+}
+
+function isInAlbaPool(c) {
+  const id = c.company_id || c.companyId;
+  if (!id) return false;
+  if (state.albaDenied.has(id)) return false;
+  if (state.albaTags.has(id) || c.is_alba) return true;
+  return hasAlbaPost(c);
 }
 
 function rebuildActiveCompanies() {
   if (state.empFilter === "alba") {
-    state.companies = state.offerCompanies.slice();
+    const byId = new Map();
+    for (const c of state.offerCompanies) {
+      if (isInAlbaPool(c)) byId.set(c.company_id, c);
+    }
+    for (const c of state.allCompanies) {
+      if (isInAlbaPool(c) && !byId.has(c.company_id)) byId.set(c.company_id, c);
+    }
+    state.companies = [...byId.values()];
   } else {
     state.companies = state.allCompanies.slice();
   }
+  state.page = 1;
+}
+
+function filteredCompanyRows() {
+  return state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
+}
+
+function pagedSlice(rows) {
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (state.page > pages) state.page = pages;
+  if (state.page < 1) state.page = 1;
+  const start = (state.page - 1) * PAGE_SIZE;
+  return { rows: rows.slice(start, start + PAGE_SIZE), total, pages };
+}
+
+function renderPager(total, pages) {
+  const pager = $("#pager");
+  if (!pager) return;
+  if (total <= PAGE_SIZE) {
+    pager.classList.add("hidden");
+    return;
+  }
+  pager.classList.remove("hidden");
+  $("#pagerInfo").textContent = `${state.page} / ${pages} · ${total}건`;
+  $("#pagerPrev").disabled = state.page <= 1;
+  $("#pagerNext").disabled = state.page >= pages;
 }
 
 function mapClientRow(row, offerMap) {
@@ -196,6 +266,7 @@ function mapClientRow(row, offerMap) {
     offer_post_count: offer.offer_post_count || 0,
     is_recommended: offer.is_recommended ?? mgmt.isRecommended ?? false,
     is_hidden: offer.is_hidden ?? mgmt.isHidden ?? !!(row.excluded || row.excludeReason),
+    is_alba: offer.is_alba ?? mgmt.isAlba ?? false,
     stage: offer.stage || mgmt.stage || "new",
     status: offer.status || mgmt.status || "active",
     mail_status: offer.mail_status || mgmt.mailStatus || "none",
@@ -395,6 +466,7 @@ function applyLocalPatch(c, patch) {
   if (patch.mailStatus != null) c.mail_status = patch.mailStatus;
   if (patch.isRecommended != null) c.is_recommended = patch.isRecommended;
   if (patch.isHidden != null) c.is_hidden = patch.isHidden;
+  if (patch.isAlba != null) c.is_alba = patch.isAlba;
   if (patch.memo != null) c.memo = patch.memo;
   if (patch.recommendScore != null) c.recommend_score = patch.recommendScore;
   if (patch.closedReason != null) c.closed_reason = patch.closedReason;
@@ -408,6 +480,7 @@ function applyRpcOut(c, out) {
   if (out.mailStatus != null) c.mail_status = out.mailStatus;
   if (out.isRecommended != null) c.is_recommended = out.isRecommended;
   if (out.isHidden != null) c.is_hidden = out.isHidden;
+  if (out.isAlba != null) c.is_alba = out.isAlba;
   if (out.memo != null) c.memo = out.memo;
   if (out.recommendScore != null) c.recommend_score = out.recommendScore;
   if (out.closedReason != null) c.closed_reason = out.closedReason;
@@ -516,6 +589,34 @@ async function recommendCompany(c, on = true) {
   if (on && state.tab === "new") switchTab("recommended");
 }
 
+async function setAlbaTag(c, on = true) {
+  const id = c.company_id;
+  if (on) {
+    state.albaTags.add(id);
+    state.albaDenied.delete(id);
+  } else {
+    state.albaTags.delete(id);
+    state.albaDenied.add(id);
+  }
+  persistAlbaTagState();
+  syncCompanyEverywhere(id, (row) => {
+    row.is_alba = on;
+  });
+  try {
+    if (state.userEmail) {
+      await patchCompany(id, { isAlba: on, isHidden: false });
+    }
+  } catch (err) {
+    // Column may not exist yet — local tag still applies
+    console.warn("isAlba persist failed", err);
+    $("#status").textContent = on ? "알바 태그 저장(로컬)" : "알바 태그 해제(로컬)";
+  }
+  rebuildActiveCompanies();
+  renderList();
+  if (state.detailId === id) paintDetail();
+  $("#status").textContent = on ? "알바 태그 붙임" : "알바 태그 해제";
+}
+
 async function excludeCompany(c) {
   if (!requireLogin()) return;
   const reason = window.prompt("제외 사유 (선택)", c.closed_reason || "") ?? null;
@@ -551,9 +652,19 @@ function actionButtons(c) {
   const stage = stageOf(c);
   const rec = !!c.is_recommended;
   const excluded = isExcluded(c);
+  const albaOn = isInAlbaPool(c);
   if (excluded) {
     return `<div class="row-actions">
       <button type="button" class="btn-act" data-act="restore" data-id="${id}" ${disabled}>복구</button>
+    </div>`;
+  }
+  // 전체 탭: 알바 태그 (추천 아님)
+  if (state.empFilter === "all") {
+    return `<div class="row-actions">
+      <button type="button" class="btn-act primary" data-act="alba_tag" data-id="${id}" ${disabled}>
+        ${albaOn ? "알바해제" : "알바태그"}
+      </button>
+      <button type="button" class="btn-act danger" data-act="exclude" data-id="${id}" ${disabled}>제외</button>
     </div>`;
   }
   return `<div class="row-actions">
@@ -605,9 +716,16 @@ function updateCounts() {
     const el = document.querySelector(`[data-post-count="${k}"]`);
     if (el) el.textContent = String(v);
   }
-  // emp tab counts: 알바 = Offer 알바 공고, 전체 = T-Client 회사 수
+  // emp tab counts: 알바 = 알바 풀 회사 수, 전체 = T-Client 회사 수
+  let albaCo = 0;
+  const seen = new Set();
+  for (const c of [...state.offerCompanies, ...state.allCompanies]) {
+    if (seen.has(c.company_id)) continue;
+    seen.add(c.company_id);
+    if (isInAlbaPool(c) && !isExcluded(c)) albaCo += 1;
+  }
   const empBuckets = {
-    alba: offerPosts().filter(isAlbaPost).length,
+    alba: albaCo,
     all: state.allCompanies.length || state.offerCompanies.length
   };
   for (const [k, v] of Object.entries(empBuckets)) {
@@ -641,6 +759,7 @@ function setView(view) {
 
 function switchTab(tab) {
   state.tab = tab;
+  state.page = 1;
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.classList.toggle("active", b.getAttribute("data-tab") === tab);
   });
@@ -650,17 +769,21 @@ function switchTab(tab) {
 function renderCompanies() {
   const body = $("#leadBody");
   const empty = $("#empty");
-  const rows = state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
+  const filtered = filteredCompanyRows();
+  const { rows, total, pages } = pagedSlice(filtered);
   updateCounts();
+  renderPager(total, pages);
   if (!rows.length) {
     body.innerHTML = "";
     empty.classList.remove("hidden");
     empty.textContent =
       state.tab === "recommended"
-        ? "비어 있습니다. 신규에서 「추천」으로 보내세요."
+        ? "비어 있습니다. 알바 탭에서 「추천」으로 보내세요."
         : state.tab === "progress"
           ? "비어 있습니다. 「메일대기」또는 「발송완료」로 진행에 넣으세요."
-          : "표시할 회사가 없습니다.";
+          : state.empFilter === "alba"
+            ? "알바 태그가 없습니다. 전체 탭에서 「알바태그」로 추가하세요."
+            : "표시할 회사가 없습니다.";
     return;
   }
   empty.classList.add("hidden");
@@ -676,10 +799,11 @@ function renderCompanies() {
       const srcKey = sourceOfCompany(c);
       const src = SOURCE_LABELS[srcKey] || srcKey || "—";
       const open = state.detailId === c.company_id;
+      const albaBadge = isInAlbaPool(c) ? ` <span class="badge badge-alba">알바</span>` : "";
       return `<tr class="${closed ? "row-closed" : ""} ${open ? "is-open" : ""}" data-company-id="${escapeAttr(c.company_id)}">
         <td><span class="badge ${gradeClass}">${escapeHtml(grade)}</span></td>
-        <td class="co-name" data-open-detail="${escapeAttr(c.company_id)}">${escapeHtml(displayName(c))}${
-          c.is_recommended ? ` <span class="badge badge-rec">추천</span>` : ""
+        <td class="co-name" data-open-detail="${escapeAttr(c.company_id)}">${escapeHtml(displayName(c))}${albaBadge}${
+          c.is_recommended && state.empFilter === "alba" ? ` <span class="badge badge-rec">추천</span>` : ""
         }</td>
         <td>${
           url
@@ -699,9 +823,11 @@ function renderCompanies() {
 function renderPosts() {
   const body = $("#postsBody");
   const empty = $("#empty");
-  const rows = listViewPosts().filter(matchesPostFilter).filter(matchesQueryPost);
+  const filtered = listViewPosts().filter(matchesPostFilter).filter(matchesQueryPost);
+  const { rows, total, pages } = pagedSlice(filtered);
   $("#leadBody").innerHTML = "";
   updateCounts();
+  renderPager(total, pages);
   if (!rows.length) {
     body.innerHTML = "";
     empty.classList.remove("hidden");
@@ -777,7 +903,13 @@ function paintDetail() {
   $("#detailRecommendBtn").classList.toggle("hidden", excluded);
   $("#detailExcludeBtn").classList.toggle("hidden", excluded);
   $("#detailRestoreBtn").classList.toggle("hidden", !excluded);
-  $("#detailRecommendBtn").textContent = c.is_recommended ? "추천해제" : "추천";
+  if (state.empFilter === "all") {
+    $("#detailRecommendBtn").textContent = isInAlbaPool(c) ? "알바해제" : "알바태그";
+    $("#detailRecommendBtn").title = "알바 탭에 넣기/빼기";
+  } else {
+    $("#detailRecommendBtn").textContent = c.is_recommended ? "추천해제" : "추천";
+    $("#detailRecommendBtn").title = "추천";
+  }
   $("#detailRecommendBtn").disabled = locked;
   $("#detailExcludeBtn").disabled = locked;
   $("#detailRestoreBtn").disabled = locked;
@@ -1053,40 +1185,74 @@ async function loadClientUniverse() {
 
 async function load() {
   $("#status").textContent = "불러오는 중…";
+  loadAlbaTagState();
   try {
-    const [offerData, clientData, mgmt] = await Promise.all([
-      loadOfferData(),
-      loadClientUniverse(),
-      TOfferSupabase.getOfferSalesManagementAll().catch(() => ({}))
-    ]);
-    state.offerMgmt = mgmt || {};
+    // 1) Client snapshot first — fast first paint for 전체
+    const clientData = await loadClientUniverse();
+    state.clientRows = clientData.rows || [];
+    state.clientPosts = null;
+    state.generatedAt = clientData.generatedAt || "";
+    state.allCompanies = state.clientRows.map((r) => mapClientRow(r, new Map()));
+    if (!state.allCompanies.length) {
+      $("#status").textContent = "Client 스냅샷 비어 있음 — Offer 데이터 로딩…";
+    } else {
+      rebuildActiveCompanies();
+      renderMeta({ generatedAt: state.generatedAt });
+      renderList();
+      $("#status").textContent = "목록 표시 중 · Offer 알바 동기화…";
+    }
+
+    // 2) Offer dashboard in background (알바 풀)
+    const offerData = await loadOfferData();
     state.offerCompanies = offerData.companies || [];
     state.posts = offerData.posts || [];
-    state.generatedAt = offerData.generatedAt || clientData.generatedAt || "";
-
+    state.generatedAt = offerData.generatedAt || state.generatedAt;
     const offerMap = new Map(state.offerCompanies.map((c) => [c.company_id, c]));
-    const clientRows = clientData.rows || [];
-    state.allCompanies = clientRows.map((r) => mapClientRow(r, offerMap));
-    state.clientPosts = flattenClientPosts(clientRows);
+    state.allCompanies = (state.clientRows.length ? state.clientRows : []).map((r) => mapClientRow(r, offerMap));
+    if (!state.allCompanies.length) state.allCompanies = state.offerCompanies.slice();
 
-    // If Client snapshot empty, fall back so 전체 still shows Offer leads
-    if (!state.allCompanies.length) {
-      state.allCompanies = state.offerCompanies.slice();
-    }
-
-    try {
-      state.edits = (await TOfferSupabase.getCompanyEditsAll()) || {};
-      mergeEditsIntoCompanies();
-    } catch (err) {
-      console.warn("company edits load failed", err);
-      state.edits = {};
-    }
+    // Sync alba tags from server management when available (non-blocking)
+    TOfferSupabase.getOfferSalesManagementAll()
+      .then((mgmt) => {
+        state.offerMgmt = mgmt || {};
+        for (const [id, m] of Object.entries(state.offerMgmt)) {
+          if (m?.isAlba) {
+            state.albaTags.add(id);
+            state.albaDenied.delete(id);
+          }
+        }
+        persistAlbaTagState();
+        for (const c of state.allCompanies) {
+          const m = state.offerMgmt[c.company_id];
+          if (m?.isAlba != null) c.is_alba = !!m.isAlba;
+          if (m?.isRecommended != null) c.is_recommended = !!m.isRecommended;
+          if (m?.isHidden != null) c.is_hidden = !!m.isHidden;
+          if (m?.stage) c.stage = m.stage;
+          if (m?.mailStatus) c.mail_status = m.mailStatus;
+          if (m?.memo != null) c.memo = m.memo;
+        }
+        rebuildActiveCompanies();
+        renderList();
+      })
+      .catch(() => {});
 
     rebuildActiveCompanies();
     renderMeta({ generatedAt: state.generatedAt });
     renderList();
     if (state.detailId) paintDetail();
     $("#status").textContent = state.userEmail ? "준비됨 (로그인)" : "준비됨 — 편집은 「관리」로그인 필요";
+
+    // 3) Edits deferred — only needed for detail overlays
+    TOfferSupabase.getCompanyEditsAll()
+      .then((edits) => {
+        state.edits = edits || {};
+        mergeEditsIntoCompanies();
+        if (state.detailId) paintDetail();
+      })
+      .catch((err) => {
+        console.warn("company edits load failed", err);
+        state.edits = {};
+      });
   } catch (err) {
     console.error(err);
     $("#status").textContent = "로드 실패";
@@ -1105,6 +1271,11 @@ async function handleRowAction(act, id) {
   }
   if (act === "recommend") {
     await recommendCompany(c, !c.is_recommended);
+    return;
+  }
+  if (act === "alba_tag") {
+    if (!requireLogin()) return;
+    await setAlbaTag(c, !isInAlbaPool(c));
     return;
   }
   if (act === "mail_ready") {
@@ -1251,6 +1422,7 @@ function bind() {
       document.querySelectorAll("[data-post-filter]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.postFilter = btn.getAttribute("data-post-filter");
+      state.page = 1;
       renderList();
     });
   });
@@ -1265,7 +1437,20 @@ function bind() {
   });
   $("#search").addEventListener("input", (e) => {
     state.query = e.target.value;
+    state.page = 1;
     renderList();
+  });
+  $("#pagerPrev")?.addEventListener("click", () => {
+    if (state.page > 1) {
+      state.page -= 1;
+      renderList();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  });
+  $("#pagerNext")?.addEventListener("click", () => {
+    state.page += 1;
+    renderList();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
   $("#reload").addEventListener("click", () => load());
 
@@ -1295,7 +1480,12 @@ function bind() {
   $("#detailRecommendBtn")?.addEventListener("click", async () => {
     const c = findCompany(state.detailId);
     if (!c) return;
-    await recommendCompany(c, !c.is_recommended);
+    if (state.empFilter === "all") {
+      if (!requireLogin()) return;
+      await setAlbaTag(c, !isInAlbaPool(c));
+    } else {
+      await recommendCompany(c, !c.is_recommended);
+    }
   });
   $("#detailExcludeBtn")?.addEventListener("click", async () => {
     const c = findCompany(state.detailId);

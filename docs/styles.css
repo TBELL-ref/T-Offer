@@ -591,6 +591,21 @@ body.detail-drawer-open { overflow: hidden; }
   padding-top: 0;
 }
 
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0 4px;
+}
+.pager-info {
+  font-size: 0.82rem;
+  color: var(--muted);
+  min-width: 72px;
+  text-align: center;
+}
+.badge-alba { background: #fce7f3; color: #9d174d; margin-left: 4px; }
+
 @media (max-width: 800px) {
   .site-header { flex-wrap: wrap; }
   .col-src, .col-mail, .col-score { display: none; }
