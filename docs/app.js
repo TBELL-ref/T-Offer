@@ -47,6 +47,8 @@ const state = {
   offerMgmt: {},
   albaTags: new Set(),
   albaDenied: new Set(),
+  /** Precomputed company_ids with alba offer posts */
+  albaPostCompanyIds: new Set(),
   query: "",
   userEmail: "",
   busyId: "",
@@ -188,9 +190,19 @@ function companyHasVisiblePost(c) {
   return isInAlbaPool(c);
 }
 
+function rebuildAlbaPostIndex() {
+  const ids = new Set();
+  for (const p of offerPosts()) {
+    if (!isAlbaPost(p)) continue;
+    const id = p.company_id || p.companyId;
+    if (id) ids.add(id);
+  }
+  state.albaPostCompanyIds = ids;
+}
+
 function hasAlbaPost(c) {
   const id = c.company_id || c.companyId;
-  return offerPosts().some((p) => (p.company_id || p.companyId) === id && isAlbaPost(p));
+  return state.albaPostCompanyIds.has(id);
 }
 
 function isInAlbaPool(c) {
@@ -198,7 +210,7 @@ function isInAlbaPool(c) {
   if (!id) return false;
   if (state.albaDenied.has(id)) return false;
   if (state.albaTags.has(id) || c.is_alba) return true;
-  return hasAlbaPost(c);
+  return state.albaPostCompanyIds.has(id);
 }
 
 function rebuildActiveCompanies() {
@@ -249,6 +261,7 @@ function mapClientRow(row, offerMap) {
   const mgmt = state.offerMgmt[id] || {};
   const posts = Array.isArray(row.posts) ? row.posts : [];
   const first = posts[0] || {};
+  // Keep only a slim first-post hint — full Client post arrays cause UI jank.
   return {
     company_id: id,
     company_name: row.companyNameKo || row.companyName || offer.company_name || id,
@@ -276,7 +289,9 @@ function mapClientRow(row, offerMap) {
     closed_reason: offer.closed_reason || mgmt.closedReason || "",
     exclude_reason: row.excludeReason || offer.exclude_reason || "",
     _pool: "client",
-    _clientPosts: posts
+    _clientPosts: first.title
+      ? [{ title: first.title, url: first.url, source: first.source, status: first.status || "open" }]
+      : []
   };
 }
 
@@ -284,19 +299,20 @@ function flattenClientPosts(rows) {
   const out = [];
   for (const row of rows || []) {
     const id = row.companyId || row.company_id;
-    for (const p of row.posts || []) {
-      out.push({
-        company_id: id,
-        title: p.title,
-        url: p.url,
-        source: p.source,
-        status: p.status || "open",
-        classify_label: "client",
-        collected_at: p.collectedAt || p.collected_at || "",
-        employment_type: "",
-        part_time_score: 0
-      });
-    }
+    // Only first post per company for 전체 공고 view (avoids 10k+ DOM rows)
+    const p = (row.posts || [])[0];
+    if (!p) continue;
+    out.push({
+      company_id: id,
+      title: p.title,
+      url: p.url,
+      source: p.source,
+      status: p.status || "open",
+      classify_label: "client",
+      collected_at: p.collectedAt || p.collected_at || "",
+      employment_type: "",
+      part_time_score: 0
+    });
   }
   return out;
 }
@@ -1113,6 +1129,9 @@ function openDetail(companyId) {
   document.body.classList.add("detail-drawer-open");
   paintDetail();
   renderList();
+  void ensureCompanyEditsLoaded().then(() => {
+    if (state.detailId === companyId) paintDetail();
+  });
 }
 
 function closeDetail() {
@@ -1206,6 +1225,7 @@ async function load() {
     const offerData = await loadOfferData();
     state.offerCompanies = offerData.companies || [];
     state.posts = offerData.posts || [];
+    rebuildAlbaPostIndex();
     state.generatedAt = offerData.generatedAt || state.generatedAt;
     const offerMap = new Map(state.offerCompanies.map((c) => [c.company_id, c]));
     state.allCompanies = (state.clientRows.length ? state.clientRows : []).map((r) => mapClientRow(r, offerMap));
@@ -1242,23 +1262,27 @@ async function load() {
     if (state.detailId) paintDetail();
     $("#status").textContent = state.userEmail ? "준비됨 (로그인)" : "준비됨 — 편집은 「관리」로그인 필요";
 
-    // 3) Edits deferred — only needed for detail overlays
-    TOfferSupabase.getCompanyEditsAll()
-      .then((edits) => {
-        state.edits = edits || {};
-        mergeEditsIntoCompanies();
-        if (state.detailId) paintDetail();
-      })
-      .catch((err) => {
-        console.warn("company edits load failed", err);
-        state.edits = {};
-      });
+    // Edits only when opening detail (avoid multi-MB parse on boot)
+    state.edits = {};
   } catch (err) {
     console.error(err);
     $("#status").textContent = "로드 실패";
     $("#empty").classList.remove("hidden");
     $("#empty").classList.add("error");
     $("#empty").textContent = `${err.message ?? err}`;
+  }
+}
+
+async function ensureCompanyEditsLoaded() {
+  if (state._editsLoaded) return;
+  state._editsLoaded = true;
+  try {
+    state.edits = (await TOfferSupabase.getCompanyEditsAll()) || {};
+    mergeEditsIntoCompanies();
+  } catch (err) {
+    console.warn("company edits load failed", err);
+    state.edits = {};
+    state._editsLoaded = false;
   }
 }
 
