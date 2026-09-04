@@ -1188,18 +1188,15 @@ async function loadOfferData() {
 }
 
 async function loadClientUniverse() {
+  // Do not fall back to get_lead_dashboard — it often statement-timeouts (57014)
+  // and stalls both Client and Offer. Empty snapshot → empty 전체 until republish.
   try {
     const snap = await TOfferSupabase.getPublishedSnapshot();
     if (snap?.rows?.length) return snap;
   } catch (err) {
     console.warn("published snapshot failed", err);
   }
-  try {
-    return await TOfferSupabase.getLeadDashboard();
-  } catch (err) {
-    console.warn("lead dashboard failed", err);
-    return { rows: [], generatedAt: "" };
-  }
+  return { rows: [], generatedAt: "" };
 }
 
 async function load() {
