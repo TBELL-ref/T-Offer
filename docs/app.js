@@ -53,6 +53,8 @@ const state = {
   userEmail: "",
   busyId: "",
   detailId: "",
+  /** null | summary | contacts | profile | crm */
+  detailEdit: null,
   passwordSetup: false,
   generatedAt: ""
 };
@@ -85,6 +87,12 @@ function stageOf(c) {
 
 function isExcluded(c) {
   return !!(c.is_hidden || c.exclude_reason);
+}
+
+function poolOf(c) {
+  if (isExcluded(c)) return "hidden";
+  if (c.is_recommended) return "recommended";
+  return "normal";
 }
 
 function isProgress(c) {
@@ -123,13 +131,50 @@ function syncCompanyEverywhere(companyId, mutator) {
   }
 }
 
-function contactOf(c) {
-  const edit = state.edits[c.company_id]?.contact || {};
+function normalizeContactEntry(raw = {}) {
   return {
+    name: `${raw.name ?? ""}`.trim(),
+    email: `${raw.email ?? ""}`.trim(),
+    phone: `${raw.phone ?? ""}`.trim()
+  };
+}
+
+function hasContactData(c) {
+  return Boolean(c?.name || c?.email || c?.phone);
+}
+
+function contactOf(c) {
+  const list = contactsOf(c);
+  return list[0] || { name: "", email: "", phone: "" };
+}
+
+function contactsOf(c) {
+  const edit = state.edits[c.company_id]?.contact || {};
+  if (Array.isArray(edit.contacts) && edit.contacts.length) {
+    return edit.contacts.map(normalizeContactEntry).filter(hasContactData);
+  }
+  const single = normalizeContactEntry({
     name: edit.name || c.contact_name || "",
     email: edit.email || c.contact_email || "",
     phone: edit.phone || c.contact_phone || ""
-  };
+  });
+  if (hasContactData(single)) return [single];
+  const fromRow = Array.isArray(c.contact?.contacts) ? c.contact.contacts : null;
+  if (fromRow?.length) return fromRow.map(normalizeContactEntry).filter(hasContactData);
+  const rowSingle = normalizeContactEntry(c.contact || {});
+  return hasContactData(rowSingle) ? [rowSingle] : [];
+}
+
+function buildContactPatch(contacts) {
+  const list = contacts.map(normalizeContactEntry).filter(hasContactData);
+  const primary = list[0] ?? { name: "", email: "", phone: "" };
+  return { ...primary, contacts: list };
+}
+
+function profileOf(c) {
+  const edit = state.edits[c.company_id]?.profile || {};
+  const base = c.profile || {};
+  return { ...base, ...edit };
 }
 
 function postStatusOf(p) {
@@ -268,9 +313,11 @@ function mapClientRow(row, offerMap) {
     domain: row.domain || offer.domain || "",
     homepage: row.profile?.homepage || offer.homepage || "",
     company_tier: row.companyTier || offer.company_tier || "",
-    contact_name: offer.contact_name || "",
-    contact_phone: offer.contact_phone || "",
-    contact_email: row.email || offer.contact_email || "",
+    profile: row.profile || {},
+    contact: row.contact || {},
+    contact_name: row.contact?.name || offer.contact_name || "",
+    contact_phone: row.contact?.phone || offer.contact_phone || "",
+    contact_email: row.contact?.email || row.email || offer.contact_email || "",
     lead_grade: row.leadGrade || offer.lead_grade || "C",
     priority_score: row.priorityScore ?? offer.priority_score ?? 0,
     score_reason: row.scoreReason || offer.score_reason || "",
@@ -288,6 +335,7 @@ function mapClientRow(row, offerMap) {
     recommend_score: offer.recommend_score ?? mgmt.recommendScore ?? 0,
     closed_reason: offer.closed_reason || mgmt.closedReason || "",
     exclude_reason: row.excludeReason || offer.exclude_reason || "",
+    remark: row.remark || "",
     _pool: "client",
     _clientPosts: first.title
       ? [{ title: first.title, url: first.url, source: first.source, status: first.status || "open" }]
@@ -538,36 +586,572 @@ async function saveCompanyEdit(companyId, patch) {
   $("#status").textContent = "회사 정보 저장 중…";
   const out = await TOfferSupabase.upsertCompanyEdit(companyId, patch);
   const prev = state.edits[companyId] || {};
+  const nextContact = patch.contact
+    ? {
+        ...(prev.contact || {}),
+        ...patch.contact,
+        ...(out?.contact || {}),
+        contacts: patch.contact.contacts ?? out?.contact?.contacts ?? prev.contact?.contacts
+      }
+    : { ...(prev.contact || {}), ...(out?.contact || {}) };
   state.edits[companyId] = {
     ...prev,
     ...(out || {}),
     companyNameKo: patch.companyNameKo ?? out?.companyNameKo ?? prev.companyNameKo,
     domain: patch.domain ?? out?.domain ?? prev.domain,
+    companyTier: patch.companyTier ?? out?.companyTier ?? prev.companyTier,
     notes: patch.notes ?? out?.notes ?? prev.notes,
-    contact: {
-      ...(prev.contact || {}),
-      ...(patch.contact || {}),
-      ...(out?.contact || {})
-    },
+    excludeReason: patch.excludeReason ?? out?.excludeReason ?? prev.excludeReason,
+    contact: nextContact,
     profile: {
       ...(prev.profile || {}),
       ...(patch.profile || {}),
       ...(out?.profile || {})
     }
   };
-  const c = state.companies.find((x) => x.company_id === companyId);
-  if (c && patch.companyNameKo) c.company_name = patch.companyNameKo;
-  if (c && patch.domain) c.domain = patch.domain;
-  if (c && patch.profile?.homepage) c.homepage = patch.profile.homepage;
   syncCompanyEverywhere(companyId, (row) => {
     if (patch.companyNameKo) row.company_name = patch.companyNameKo;
     if (patch.domain) row.domain = patch.domain;
+    if (patch.companyTier != null) row.company_tier = patch.companyTier;
+    if (patch.profile) row.profile = { ...(row.profile || {}), ...patch.profile };
     if (patch.profile?.homepage) row.homepage = patch.profile.homepage;
+    if (patch.contact) {
+      row.contact = nextContact;
+      row.contact_name = nextContact.name || "";
+      row.contact_email = nextContact.email || "";
+      row.contact_phone = nextContact.phone || "";
+    }
+    if (patch.excludeReason != null) row.exclude_reason = patch.excludeReason;
   });
   renderList();
   if (state.detailId === companyId) paintDetail();
   $("#status").textContent = "회사 정보 저장됨";
   return out;
+}
+
+function sectionHead(title, sectionKey, locked) {
+  const editing = state.detailEdit === sectionKey;
+  if (locked) {
+    return `<div class="detail-section-head"><h3 class="detail-block-title">${escapeHtml(title)}</h3></div>`;
+  }
+  if (editing) {
+    return `<div class="detail-section-head">
+      <h3 class="detail-block-title">${escapeHtml(title)}</h3>
+      <div class="detail-section-actions">
+        <button type="button" class="btn-primary btn-sm" data-section-save="${sectionKey}">저장</button>
+        <button type="button" class="btn-ghost btn-sm" data-section-cancel="${sectionKey}">취소</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="detail-section-head">
+    <h3 class="detail-block-title">${escapeHtml(title)}</h3>
+    <button type="button" class="btn-ghost btn-sm" data-section-edit="${sectionKey}">편집</button>
+  </div>`;
+}
+
+function kvRow(label, valueHtml) {
+  return `<div class="detail-kv-row"><dt>${escapeHtml(label)}</dt><dd>${valueHtml}</dd></div>`;
+}
+
+function fieldRow(label, inputHtml) {
+  return `<div class="detail-field"><label>${escapeHtml(label)}</label>${inputHtml}</div>`;
+}
+
+function tierOptions(selected) {
+  const opts = [
+    ["", "미지정"],
+    ["startup", "스타트업·미확인"],
+    ["mid", "중견"],
+    ["enterprise", "대기업"]
+  ];
+  return opts
+    .map(
+      ([v, l]) =>
+        `<option value="${escapeAttr(v)}" ${selected === v ? "selected" : ""}>${escapeHtml(l)}</option>`
+    )
+    .join("");
+}
+
+function renderSummarySection(c, edit, locked) {
+  const editing = state.detailEdit === "summary";
+  const name = displayName(c);
+  const tier = edit.companyTier || c.company_tier || "";
+  const excludeReason = edit.excludeReason ?? c.exclude_reason ?? "";
+  const notes = edit.notes || "";
+  const memo = c.memo || "";
+  const revenue = edit.profile?.revenueLabel || c.profile?.revenueLabel || "";
+  const head = sectionHead("요약", "summary", locked);
+
+  if (editing) {
+    return `<section class="detail-block" data-section="summary">
+      ${head}
+      ${fieldRow("회사명", `<input id="detailName" type="text" value="${escapeAttr(name)}" />`)}
+      ${fieldRow("규모", `<select id="detailTier">${tierOptions(tier)}</select>`)}
+      ${fieldRow("매출", `<input id="detailRevenue" type="text" value="${escapeAttr(revenue)}" placeholder="예: 114억 (2025)" />`)}
+      ${fieldRow("제외 사유", `<input id="detailExcludeReason" type="text" value="${escapeAttr(excludeReason)}" placeholder="회사 제외 사유(공유)" />`)}
+      ${fieldRow("영업 메모", `<textarea id="detailMemo" placeholder="Offer 영업 메모">${escapeHtml(memo)}</textarea>`)}
+      ${fieldRow("회사 노트", `<textarea id="detailNotes" placeholder="Client와 공유되는 회사 노트">${escapeHtml(notes)}</textarea>`)}
+    </section>`;
+  }
+
+  const tierLabel = { startup: "스타트업·미확인", mid: "중견", enterprise: "대기업" }[tier] || tier || "—";
+  return `<section class="detail-block" data-section="summary">
+    ${head}
+    <dl class="detail-kv">
+      ${kvRow("회사명", escapeHtml(name))}
+      ${kvRow("규모", escapeHtml(tierLabel))}
+      ${kvRow("매출", escapeHtml(revenue || "—"))}
+      ${kvRow("제외 사유", escapeHtml(excludeReason || "—"))}
+      ${kvRow("영업 메모", memo ? `<span class="text-preline">${escapeHtml(memo)}</span>` : "—")}
+      ${kvRow("회사 노트", notes ? `<span class="text-preline">${escapeHtml(notes)}</span>` : "—")}
+    </dl>
+  </section>`;
+}
+
+function renderContactsSection(c, locked) {
+  const editing = state.detailEdit === "contacts";
+  const list = contactsOf(c);
+  const head = sectionHead("담당자", "contacts", locked);
+
+  if (editing) {
+    const cards = (list.length ? list : [{ name: "", email: "", phone: "" }])
+      .map(
+        (ct, i) => `<div class="contact-edit-card" data-contact-card="${i}">
+          ${fieldRow("이름", `<input type="text" data-contact-field="name" value="${escapeAttr(ct.name)}" placeholder="이름" />`)}
+          ${fieldRow("이메일", `<input type="email" data-contact-field="email" value="${escapeAttr(ct.email)}" placeholder="email@…" />`)}
+          ${fieldRow("전화", `<input type="tel" data-contact-field="phone" value="${escapeAttr(ct.phone)}" placeholder="전화" />`)}
+          <div class="detail-actions-row">
+            <button type="button" class="btn-ghost btn-sm danger-text" data-contact-remove="${i}">이 담당자 삭제</button>
+          </div>
+        </div>`
+      )
+      .join("");
+    return `<section class="detail-block" data-section="contacts">
+      ${head}
+      <div id="detailContactList">${cards}</div>
+      <div class="detail-actions-row">
+        <button type="button" class="btn-ghost btn-sm" id="detailAddContact">담당자 추가</button>
+      </div>
+    </section>`;
+  }
+
+  const body = list.length
+    ? `<ul class="contact-view-list">${list
+        .map((ct) => {
+          const parts = [
+            ct.name ? `<strong>${escapeHtml(ct.name)}</strong>` : "",
+            ct.email
+              ? `<a class="post-link" href="mailto:${escapeAttr(ct.email)}">${escapeHtml(ct.email)}</a>`
+              : "",
+            ct.phone ? escapeHtml(ct.phone) : ""
+          ].filter(Boolean);
+          return `<li>${parts.join(" · ")}</li>`;
+        })
+        .join("")}</ul>`
+    : `<p class="detail-muted">등록된 담당자가 없습니다.</p>`;
+
+  return `<section class="detail-block" data-section="contacts">${head}${body}</section>`;
+}
+
+function renderProfileSection(c, edit, locked) {
+  const editing = state.detailEdit === "profile";
+  const p = profileOf(c);
+  const domain = edit.domain || c.domain || "";
+  const head = sectionHead("회사 프로필", "profile", locked);
+  const fields = [
+    ["도메인", "detailDomain", domain],
+    ["홈페이지", "detailHomepage", p.homepage || c.homepage || ""],
+    ["서비스명", "detailServiceName", p.serviceName || p.service_name || ""],
+    ["서비스 URL", "detailServiceUrl", p.serviceUrl || p.service_url || ""],
+    ["법인명", "detailLegal", p.companyNameLegal || ""],
+    ["사업자번호", "detailBizNo", p.bizNo || ""],
+    ["업태", "detailBizType", p.bizType || ""],
+    ["종목", "detailBizItem", p.bizItem || ""],
+    ["기업규모", "detailScale", p.companyScale || ""],
+    ["사업자상태", "detailBizStatus", p.bizStatus || ""],
+    ["등록일", "detailFounded", p.foundedDate || ""],
+    ["종업원", "detailEmp", p.employeeCount || ""],
+    ["산업분류", "detailIndustry", p.industrySummary || ""]
+  ];
+
+  if (editing) {
+    return `<section class="detail-block" data-section="profile">
+      ${head}
+      ${fields
+        .map(([label, id, val]) => {
+          const type = id.includes("Homepage") || id.includes("Url") ? "url" : "text";
+          return fieldRow(label, `<input id="${id}" type="${type}" value="${escapeAttr(val)}" />`);
+        })
+        .join("")}
+    </section>`;
+  }
+
+  const shown = fields.filter(([, , v]) => `${v ?? ""}`.trim());
+  const body = shown.length
+    ? `<dl class="detail-kv">${shown
+        .map(([label, , val]) => {
+          const v = `${val}`.trim();
+          const cell =
+            label === "홈페이지" || label === "서비스 URL"
+              ? `<a class="post-link" href="${escapeAttr(v)}" target="_blank" rel="noopener">${escapeHtml(v)}</a>`
+              : escapeHtml(v);
+          return kvRow(label, cell);
+        })
+        .join("")}</dl>`
+    : `<p class="detail-muted">프로필 정보가 없습니다. 편집으로 입력하세요.</p>`;
+
+  return `<section class="detail-block" data-section="profile">${head}${body}</section>`;
+}
+
+function renderCrmSection(c, locked) {
+  const editing = state.detailEdit === "crm";
+  const excluded = isExcluded(c);
+  const stage = stageOf(c);
+  const pool = poolOf(c);
+  const dis = locked ? "disabled" : "";
+  const head = sectionHead("Offer 분류", "crm", locked);
+
+  // Pool / stage always interactive when logged in (quick actions); score/reason in edit mode.
+  const poolBlock = `<div class="detail-field">
+      <label>풀</label>
+      <div class="pool-radios">
+        <label><input type="radio" name="detailPool" value="normal" ${pool === "normal" ? "checked" : ""} ${dis} /> 일반</label>
+        <label><input type="radio" name="detailPool" value="recommended" ${pool === "recommended" ? "checked" : ""} ${dis} /> 추천</label>
+        <label><input type="radio" name="detailPool" value="hidden" ${pool === "hidden" ? "checked" : ""} ${dis} /> 제외</label>
+      </div>
+    </div>
+    <div class="detail-field">
+      <label>단계</label>
+      <select id="detailStage" ${dis}>
+        ${Object.entries(STAGE_LABELS)
+          .map(
+            ([k, v]) =>
+              `<option value="${k}" ${stage === k ? "selected" : ""}>${escapeHtml(v)}</option>`
+          )
+          .join("")}
+      </select>
+    </div>`;
+
+  if (editing) {
+    return `<section class="detail-block" data-section="crm">
+      ${head}
+      ${poolBlock}
+      ${fieldRow(
+        "추천점수",
+        `<input id="detailRecScore" type="number" min="0" max="5" step="1" value="${escapeAttr(String(c.recommend_score ?? 0))}" />`
+      )}
+      ${fieldRow(
+        "제외사유",
+        `<input id="detailClosedReason" type="text" value="${escapeAttr(c.closed_reason || "")}" placeholder="Offer 제외 시 사유" />`
+      )}
+    </section>`;
+  }
+
+  return `<section class="detail-block" data-section="crm">
+    ${head}
+    ${poolBlock}
+    <dl class="detail-kv">
+      ${kvRow("추천점수", escapeHtml(String(c.recommend_score ?? 0)))}
+      ${kvRow("제외사유", escapeHtml(c.closed_reason || "—"))}
+      ${excluded ? kvRow("상태", `<span class="badge badge-closed">제외됨</span>`) : ""}
+    </dl>
+  </section>`;
+}
+
+function paintDetail() {
+  const c = findCompany(state.detailId);
+  const drawer = $("#detailDrawer");
+  if (!c || !drawer) {
+    closeDetail();
+    return;
+  }
+  const edit = state.edits[c.company_id] || {};
+  const locked = !state.userEmail;
+  const excluded = isExcluded(c);
+  const posts = postsForCompany(c);
+  const grade = (c.lead_grade || "C").toUpperCase();
+  const stage = stageOf(c);
+  const p = profileOf(c);
+
+  $("#detailTitle").textContent = displayName(c);
+  $("#detailHeaderChips").innerHTML = `
+    <span class="badge ${grade === "A" ? "badge-a" : grade === "B" ? "badge-b" : "badge-c"}">${escapeHtml(grade)}</span>
+    <span class="badge badge-src">${escapeHtml(STAGE_LABELS[stage] || stage)}</span>
+    ${c.is_recommended ? `<span class="badge badge-rec">추천</span>` : ""}
+    ${excluded ? `<span class="badge badge-closed">제외</span>` : ""}
+  `;
+  $("#detailHeaderSub").textContent = [
+    edit.domain || c.domain || "",
+    p.homepage || c.homepage || "",
+    `점수 ${c.priority_score ?? 0}`
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  $("#detailRecommendBtn").classList.toggle("hidden", excluded);
+  $("#detailExcludeBtn").classList.toggle("hidden", excluded);
+  $("#detailRestoreBtn").classList.toggle("hidden", !excluded);
+  if (state.empFilter === "all") {
+    $("#detailRecommendBtn").textContent = isInAlbaPool(c) ? "알바해제" : "알바태그";
+    $("#detailRecommendBtn").title = "알바 탭에 넣기/빼기";
+  } else {
+    $("#detailRecommendBtn").textContent = c.is_recommended ? "추천해제" : "추천";
+    $("#detailRecommendBtn").title = "추천";
+  }
+  $("#detailRecommendBtn").disabled = locked;
+  $("#detailExcludeBtn").disabled = locked;
+  $("#detailRestoreBtn").disabled = locked;
+
+  const dis = locked ? "disabled" : "";
+  $("#detailBody").innerHTML = `
+    ${renderCrmSection(c, locked)}
+    ${renderSummarySection(c, edit, locked)}
+    ${renderContactsSection(c, locked)}
+    ${renderProfileSection(c, edit, locked)}
+
+    <section class="detail-block">
+      <h3 class="detail-block-title">빠른 액션</h3>
+      <div class="detail-actions-row">
+        <button type="button" class="btn-ghost" id="detailPromoBtn">메일문구 복사</button>
+        <button type="button" class="btn-ghost" id="detailMailReadyBtn" ${dis}>메일대기로</button>
+        <button type="button" class="btn-ghost" id="detailMailedBtn" ${dis}>발송완료</button>
+      </div>
+      ${locked ? `<p class="detail-muted">편집하려면 「관리」에서 로그인하세요. (T-Client와 동일 계정)</p>` : ""}
+      ${c.score_reason ? `<p class="detail-muted">점수 사유: ${escapeHtml(c.score_reason)}</p>` : ""}
+    </section>
+
+    <section class="detail-block">
+      <h3 class="detail-block-title">공고 ${posts.length}</h3>
+      ${
+        posts.length
+          ? `<ul class="detail-post-list">${posts
+              .map((post) => {
+                const src = SOURCE_LABELS[post.source] || post.source || "—";
+                const title = post.title || "(제목 없음)";
+                const url = post.url || "";
+                const st = postStatusOf(post);
+                return `<li>
+                  ${statusBadge(st)}
+                  <span class="badge badge-src">${escapeHtml(src)}</span>
+                  ${
+                    url
+                      ? `<a class="post-link" href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>`
+                      : escapeHtml(title)
+                  }
+                  <div class="detail-muted">${escapeHtml(formatTime(post.collected_at || post.collectedAt))}</div>
+                </li>`;
+              })
+              .join("")}</ul>`
+          : `<p class="detail-muted">연결된 Offer 공고가 없습니다.</p>`
+      }
+    </section>
+  `;
+
+  bindDetailEvents(c);
+}
+
+function bindDetailEvents(c) {
+  $("#detailPromoBtn")?.addEventListener("click", () => copyPromo(c));
+  $("#detailMailReadyBtn")?.addEventListener("click", async () => {
+    await patchCompany(c.company_id, { stage: "mail_ready", mailStatus: "ready", isHidden: false });
+    switchTab("progress");
+  });
+  $("#detailMailedBtn")?.addEventListener("click", async () => {
+    await patchCompany(c.company_id, {
+      stage: "mailed",
+      mailStatus: "sent",
+      mailedAt: new Date().toISOString(),
+      isHidden: false
+    });
+    switchTab("progress");
+  });
+
+  document.querySelectorAll("[data-section-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!requireLogin()) return;
+      state.detailEdit = btn.getAttribute("data-section-edit");
+      paintDetail();
+    });
+  });
+  document.querySelectorAll("[data-section-cancel]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.detailEdit = null;
+      paintDetail();
+    });
+  });
+  document.querySelectorAll("[data-section-save]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      void saveDetailSection(c, btn.getAttribute("data-section-save"));
+    });
+  });
+
+  $("#detailAddContact")?.addEventListener("click", () => {
+    const list = $("#detailContactList");
+    if (!list) return;
+    const i = list.querySelectorAll("[data-contact-card]").length;
+    const wrap = document.createElement("div");
+    wrap.className = "contact-edit-card";
+    wrap.setAttribute("data-contact-card", String(i));
+    wrap.innerHTML = `
+      ${fieldRow("이름", `<input type="text" data-contact-field="name" value="" placeholder="이름" />`)}
+      ${fieldRow("이메일", `<input type="email" data-contact-field="email" value="" placeholder="email@…" />`)}
+      ${fieldRow("전화", `<input type="tel" data-contact-field="phone" value="" placeholder="전화" />`)}
+      <div class="detail-actions-row">
+        <button type="button" class="btn-ghost btn-sm danger-text" data-contact-remove="${i}">이 담당자 삭제</button>
+      </div>`;
+    list.appendChild(wrap);
+    wrap.querySelector("[data-contact-remove]")?.addEventListener("click", () => wrap.remove());
+  });
+  document.querySelectorAll("[data-contact-remove]").forEach((btn) => {
+    btn.addEventListener("click", () => btn.closest("[data-contact-card]")?.remove());
+  });
+
+  document.querySelectorAll('input[name="detailPool"]').forEach((el) => {
+    el.addEventListener("change", async () => {
+      const v = el.value;
+      if (v === "recommended") await recommendCompany(c, true);
+      else if (v === "hidden") await excludeCompany(c);
+      else {
+        await patchCompany(c.company_id, {
+          isRecommended: false,
+          isHidden: false,
+          ...(stageOf(c) === "lost" ? { stage: "new", status: "active", closedReason: "" } : {})
+        });
+      }
+    });
+  });
+  $("#detailStage")?.addEventListener("change", async (e) => {
+    const next = e.target.value;
+    const patch = { stage: next };
+    if (next === "mail_ready") patch.mailStatus = "ready";
+    if (next === "mailed") {
+      patch.mailStatus = "sent";
+      patch.mailedAt = new Date().toISOString();
+    }
+    if (next === "lost") {
+      patch.isHidden = true;
+      patch.isRecommended = false;
+    }
+    await patchCompany(c.company_id, patch);
+    if (PROGRESS_STAGES.has(next)) switchTab("progress");
+  });
+}
+
+function readContactsFromForm() {
+  return [...document.querySelectorAll("[data-contact-card]")]
+    .map((card) =>
+      normalizeContactEntry({
+        name: card.querySelector('[data-contact-field="name"]')?.value,
+        email: card.querySelector('[data-contact-field="email"]')?.value,
+        phone: card.querySelector('[data-contact-field="phone"]')?.value
+      })
+    )
+    .filter(hasContactData);
+}
+
+async function saveDetailSection(c, section) {
+  if (!requireLogin()) return;
+  try {
+    if (section === "summary") {
+      const name = $("#detailName")?.value?.trim() || "";
+      const tier = $("#detailTier")?.value || "";
+      const revenue = $("#detailRevenue")?.value?.trim() || "";
+      const excludeReason = $("#detailExcludeReason")?.value?.trim() || "";
+      const notes = $("#detailNotes")?.value ?? "";
+      const memo = $("#detailMemo")?.value ?? "";
+      const prevProfile = profileOf(c);
+      await saveCompanyEdit(c.company_id, {
+        companyNameKo: name,
+        companyTier: tier,
+        notes,
+        excludeReason,
+        profile: { ...prevProfile, revenueLabel: revenue }
+      });
+      await patchCompany(c.company_id, { memo });
+    } else if (section === "contacts") {
+      await saveCompanyEdit(c.company_id, { contact: buildContactPatch(readContactsFromForm()) });
+    } else if (section === "profile") {
+      const prev = profileOf(c);
+      await saveCompanyEdit(c.company_id, {
+        domain: $("#detailDomain")?.value?.trim() || "",
+        profile: {
+          ...prev,
+          homepage: $("#detailHomepage")?.value?.trim() || "",
+          serviceName: $("#detailServiceName")?.value?.trim() || "",
+          serviceUrl: $("#detailServiceUrl")?.value?.trim() || "",
+          companyNameLegal: $("#detailLegal")?.value?.trim() || "",
+          bizNo: $("#detailBizNo")?.value?.trim() || "",
+          bizType: $("#detailBizType")?.value?.trim() || "",
+          bizItem: $("#detailBizItem")?.value?.trim() || "",
+          companyScale: $("#detailScale")?.value?.trim() || "",
+          bizStatus: $("#detailBizStatus")?.value?.trim() || "",
+          foundedDate: $("#detailFounded")?.value?.trim() || "",
+          employeeCount: $("#detailEmp")?.value?.trim() || "",
+          industrySummary: $("#detailIndustry")?.value?.trim() || ""
+        }
+      });
+    } else if (section === "crm") {
+      await patchCompany(c.company_id, {
+        recommendScore: Number($("#detailRecScore")?.value || 0),
+        closedReason: $("#detailClosedReason")?.value?.trim() || "",
+        stage: $("#detailStage")?.value || stageOf(c)
+      });
+    }
+    state.detailEdit = null;
+    paintDetail();
+    $("#status").textContent = "저장됨";
+  } catch (err) {
+    $("#status").textContent = err.message || "저장 실패";
+  }
+}
+
+function openDetail(companyId) {
+  const c = findCompany(companyId);
+  if (!c) return;
+  state.detailId = companyId;
+  state.detailEdit = null;
+  const drawer = $("#detailDrawer");
+  drawer?.classList.remove("hidden");
+  drawer?.setAttribute("aria-hidden", "false");
+  document.body.classList.add("detail-drawer-open");
+  paintDetail();
+  renderList();
+  void ensureCompanyEditsLoaded().then(() => {
+    if (state.detailId === companyId) paintDetail();
+  });
+}
+
+function closeDetail() {
+  state.detailId = "";
+  state.detailEdit = null;
+  const drawer = $("#detailDrawer");
+  drawer?.classList.add("hidden");
+  drawer?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("detail-drawer-open");
+  renderList();
+}
+
+function mergeEditsIntoCompanies() {
+  for (const list of [state.offerCompanies, state.allCompanies, state.companies]) {
+    for (const company of list) {
+      const edit = state.edits[company.company_id];
+      if (!edit) continue;
+      if (edit.companyNameKo) company.company_name = edit.companyNameKo;
+      if (edit.domain) company.domain = edit.domain;
+      if (edit.companyTier) company.company_tier = edit.companyTier;
+      if (edit.excludeReason != null) company.exclude_reason = edit.excludeReason;
+      if (edit.profile) {
+        company.profile = { ...(company.profile || {}), ...edit.profile };
+        if (edit.profile.homepage) company.homepage = edit.profile.homepage;
+      }
+      if (edit.contact) {
+        company.contact = edit.contact;
+        company.contact_name = edit.contact.name || company.contact_name || "";
+        company.contact_email = edit.contact.email || company.contact_email || "";
+        company.contact_phone = edit.contact.phone || company.contact_phone || "";
+      }
+    }
+  }
 }
 
 async function copyPromo(c) {
@@ -878,281 +1462,6 @@ function renderPosts() {
 function renderList() {
   if (state.view === "posts") renderPosts();
   else renderCompanies();
-}
-
-function poolOf(c) {
-  if (isExcluded(c)) return "hidden";
-  if (c.is_recommended) return "recommended";
-  return "normal";
-}
-
-function paintDetail() {
-  const c = findCompany(state.detailId);
-  const drawer = $("#detailDrawer");
-  if (!c || !drawer) {
-    closeDetail();
-    return;
-  }
-  const edit = state.edits[c.company_id] || {};
-  const contact = contactOf(c);
-  const locked = !state.userEmail;
-  const excluded = isExcluded(c);
-  const posts = postsForCompany(c);
-  const grade = (c.lead_grade || "C").toUpperCase();
-  const stage = stageOf(c);
-
-  $("#detailTitle").textContent = displayName(c);
-  $("#detailHeaderChips").innerHTML = `
-    <span class="badge ${grade === "A" ? "badge-a" : grade === "B" ? "badge-b" : "badge-c"}">${escapeHtml(grade)}</span>
-    <span class="badge badge-src">${escapeHtml(STAGE_LABELS[stage] || stage)}</span>
-    ${c.is_recommended ? `<span class="badge badge-rec">추천</span>` : ""}
-    ${excluded ? `<span class="badge badge-closed">제외</span>` : ""}
-  `;
-  $("#detailHeaderSub").textContent = [
-    edit.domain || c.domain || "",
-    c.homepage || edit.profile?.homepage || "",
-    `점수 ${c.priority_score ?? 0}`
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  $("#detailRecommendBtn").classList.toggle("hidden", excluded);
-  $("#detailExcludeBtn").classList.toggle("hidden", excluded);
-  $("#detailRestoreBtn").classList.toggle("hidden", !excluded);
-  if (state.empFilter === "all") {
-    $("#detailRecommendBtn").textContent = isInAlbaPool(c) ? "알바해제" : "알바태그";
-    $("#detailRecommendBtn").title = "알바 탭에 넣기/빼기";
-  } else {
-    $("#detailRecommendBtn").textContent = c.is_recommended ? "추천해제" : "추천";
-    $("#detailRecommendBtn").title = "추천";
-  }
-  $("#detailRecommendBtn").disabled = locked;
-  $("#detailExcludeBtn").disabled = locked;
-  $("#detailRestoreBtn").disabled = locked;
-
-  const dis = locked ? "disabled" : "";
-  const pool = poolOf(c);
-  const homepage = c.homepage || edit.profile?.homepage || "";
-
-  $("#detailBody").innerHTML = `
-    <section class="detail-block">
-      <h3 class="detail-block-title">분류</h3>
-      <div class="detail-field">
-        <label>풀</label>
-        <div class="pool-radios">
-          <label><input type="radio" name="detailPool" value="normal" ${pool === "normal" ? "checked" : ""} ${dis} /> 일반</label>
-          <label><input type="radio" name="detailPool" value="recommended" ${pool === "recommended" ? "checked" : ""} ${dis} /> 추천</label>
-          <label><input type="radio" name="detailPool" value="hidden" ${pool === "hidden" ? "checked" : ""} ${dis} /> 제외</label>
-        </div>
-      </div>
-      <div class="detail-field">
-        <label>단계</label>
-        <select id="detailStage" ${dis}>
-          ${Object.entries(STAGE_LABELS)
-            .map(
-              ([k, v]) =>
-                `<option value="${k}" ${stage === k ? "selected" : ""}>${escapeHtml(v)}</option>`
-            )
-            .join("")}
-        </select>
-      </div>
-      <div class="detail-field">
-        <label>추천점수</label>
-        <input id="detailRecScore" type="number" min="0" max="5" step="1" value="${escapeAttr(String(c.recommend_score ?? 0))}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>제외사유</label>
-        <input id="detailClosedReason" type="text" value="${escapeAttr(c.closed_reason || "")}" ${dis} placeholder="제외 시 사유" />
-      </div>
-    </section>
-
-    <section class="detail-block">
-      <h3 class="detail-block-title">회사 정보</h3>
-      <div class="detail-field">
-        <label>회사명</label>
-        <input id="detailName" type="text" value="${escapeAttr(displayName(c))}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>도메인</label>
-        <input id="detailDomain" type="text" value="${escapeAttr(edit.domain || c.domain || "")}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>홈페이지</label>
-        <input id="detailHomepage" type="url" value="${escapeAttr(homepage)}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>담당자</label>
-        <input id="detailContactName" type="text" value="${escapeAttr(contact.name)}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>이메일</label>
-        <input id="detailContactEmail" type="email" value="${escapeAttr(contact.email)}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>전화</label>
-        <input id="detailContactPhone" type="text" value="${escapeAttr(contact.phone)}" ${dis} />
-      </div>
-      <div class="detail-field">
-        <label>메모</label>
-        <textarea id="detailMemo" ${dis} placeholder="영업 메모">${escapeHtml(c.memo || "")}</textarea>
-      </div>
-      <div class="detail-field">
-        <label>노트</label>
-        <textarea id="detailNotes" ${dis} placeholder="회사 노트">${escapeHtml(edit.notes || "")}</textarea>
-      </div>
-      <div class="detail-actions-row">
-        <button type="button" class="btn-primary btn-sm" id="detailSaveBtn" ${dis} style="width:auto">정보 저장</button>
-        <button type="button" class="btn-ghost" id="detailPromoBtn">메일문구 복사</button>
-        <button type="button" class="btn-ghost" id="detailMailReadyBtn" ${dis}>메일대기로</button>
-        <button type="button" class="btn-ghost" id="detailMailedBtn" ${dis}>발송완료</button>
-      </div>
-      ${locked ? `<p class="detail-muted">편집하려면 「관리」에서 로그인하세요. (T-Client와 동일 계정)</p>` : ""}
-      ${c.score_reason ? `<p class="detail-muted">점수 사유: ${escapeHtml(c.score_reason)}</p>` : ""}
-    </section>
-
-    <section class="detail-block">
-      <h3 class="detail-block-title">공고 ${posts.length}</h3>
-      ${
-        posts.length
-          ? `<ul class="detail-post-list">${posts
-              .map((p) => {
-                const src = SOURCE_LABELS[p.source] || p.source || "—";
-                const title = p.title || "(제목 없음)";
-                const url = p.url || "";
-                const st = postStatusOf(p);
-                return `<li>
-                  ${statusBadge(st)}
-                  <span class="badge badge-src">${escapeHtml(src)}</span>
-                  ${
-                    url
-                      ? `<a class="post-link" href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>`
-                      : escapeHtml(title)
-                  }
-                  <div class="detail-muted">${escapeHtml(formatTime(p.collected_at || p.collectedAt))}</div>
-                </li>`;
-              })
-              .join("")}</ul>`
-          : `<p class="detail-muted">연결된 Offer 공고가 없습니다.</p>`
-      }
-    </section>
-  `;
-
-  $("#detailSaveBtn")?.addEventListener("click", () => saveDetailForm(c));
-  $("#detailPromoBtn")?.addEventListener("click", () => copyPromo(c));
-  $("#detailMailReadyBtn")?.addEventListener("click", async () => {
-    await patchCompany(c.company_id, { stage: "mail_ready", mailStatus: "ready", isHidden: false });
-    switchTab("progress");
-  });
-  $("#detailMailedBtn")?.addEventListener("click", async () => {
-    await patchCompany(c.company_id, {
-      stage: "mailed",
-      mailStatus: "sent",
-      mailedAt: new Date().toISOString(),
-      isHidden: false
-    });
-    switchTab("progress");
-  });
-  document.querySelectorAll('input[name="detailPool"]').forEach((el) => {
-    el.addEventListener("change", async () => {
-      const v = el.value;
-      if (v === "recommended") await recommendCompany(c, true);
-      else if (v === "hidden") await excludeCompany(c);
-      else {
-        await patchCompany(c.company_id, {
-          isRecommended: false,
-          isHidden: false,
-          ...(stageOf(c) === "lost" ? { stage: "new", status: "active", closedReason: "" } : {})
-        });
-      }
-    });
-  });
-  $("#detailStage")?.addEventListener("change", async (e) => {
-    const next = e.target.value;
-    const patch = { stage: next };
-    if (next === "mail_ready") patch.mailStatus = "ready";
-    if (next === "mailed") {
-      patch.mailStatus = "sent";
-      patch.mailedAt = new Date().toISOString();
-    }
-    if (next === "lost") {
-      patch.isHidden = true;
-      patch.isRecommended = false;
-    }
-    await patchCompany(c.company_id, patch);
-    if (PROGRESS_STAGES.has(next)) switchTab("progress");
-  });
-}
-
-async function saveDetailForm(c) {
-  if (!requireLogin()) return;
-  const name = $("#detailName")?.value?.trim() || "";
-  const domain = $("#detailDomain")?.value?.trim() || "";
-  const homepage = $("#detailHomepage")?.value?.trim() || "";
-  const contact = {
-    name: $("#detailContactName")?.value?.trim() || "",
-    email: $("#detailContactEmail")?.value?.trim() || "",
-    phone: $("#detailContactPhone")?.value?.trim() || ""
-  };
-  const notes = $("#detailNotes")?.value ?? "";
-  const memo = $("#detailMemo")?.value ?? "";
-  const recommendScore = Number($("#detailRecScore")?.value || 0);
-  const closedReason = $("#detailClosedReason")?.value?.trim() || "";
-  const stage = $("#detailStage")?.value || stageOf(c);
-
-  try {
-    await saveCompanyEdit(c.company_id, {
-      companyNameKo: name,
-      domain,
-      notes,
-      contact,
-      profile: { homepage }
-    });
-    await patchCompany(c.company_id, {
-      memo,
-      recommendScore,
-      closedReason,
-      stage
-    });
-    $("#status").textContent = "저장됨";
-  } catch (err) {
-    $("#status").textContent = err.message || "저장 실패";
-  }
-}
-
-function openDetail(companyId) {
-  const c = findCompany(companyId);
-  if (!c) return;
-  state.detailId = companyId;
-  const drawer = $("#detailDrawer");
-  drawer?.classList.remove("hidden");
-  drawer?.setAttribute("aria-hidden", "false");
-  document.body.classList.add("detail-drawer-open");
-  paintDetail();
-  renderList();
-  void ensureCompanyEditsLoaded().then(() => {
-    if (state.detailId === companyId) paintDetail();
-  });
-}
-
-function closeDetail() {
-  state.detailId = "";
-  const drawer = $("#detailDrawer");
-  drawer?.classList.add("hidden");
-  drawer?.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("detail-drawer-open");
-  renderList();
-}
-
-function mergeEditsIntoCompanies() {
-  for (const list of [state.offerCompanies, state.allCompanies, state.companies]) {
-    for (const c of list) {
-      const edit = state.edits[c.company_id];
-      if (!edit) continue;
-      if (edit.companyNameKo) c.company_name = edit.companyNameKo;
-      if (edit.domain) c.domain = edit.domain;
-      if (edit.profile?.homepage) c.homepage = edit.profile.homepage;
-    }
-  }
 }
 
 async function loadOfferData() {
