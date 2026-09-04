@@ -1,4 +1,11 @@
-import { buildPromoMail, mailtoHref } from "./promoMail.js";
+import {
+  buildPromoMail,
+  mailtoHref,
+  loadMailTemplate,
+  saveMailTemplate,
+  resetMailTemplate,
+  DEFAULT_MAIL_TEMPLATE
+} from "./promoMail.js";
 
 const cfg = window.TOfferSupabaseConfig || {};
 
@@ -48,5 +55,9 @@ export const TOfferSupabase = {
   upsertCompanyEdit: (companyId, patch) =>
     rpc("upsert_company_edit", { p_company_id: companyId, p_patch: patch }, { auth: true }),
   buildPromoMail,
-  mailtoHref
+  mailtoHref,
+  loadMailTemplate,
+  saveMailTemplate,
+  resetMailTemplate,
+  DEFAULT_MAIL_TEMPLATE
 };

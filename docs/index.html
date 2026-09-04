@@ -60,6 +60,18 @@
               </div>
               <div id="adminTools" class="admin-popover-section hidden">
                 <p class="admin-popover-title" id="adminToolsEmail"></p>
+                <div class="admin-mail-block">
+                  <p class="admin-popover-title">메일 본문 (공용 1개)</p>
+                  <p class="admin-popover-hint">자리표시자: {{company}} {{title}} {{url}} {{titleLine}} {{urlLine}}</p>
+                  <label class="admin-field-label" for="mailTplSubject">제목</label>
+                  <input type="text" id="mailTplSubject" class="admin-popover-input" />
+                  <label class="admin-field-label" for="mailTplBody">본문</label>
+                  <textarea id="mailTplBody" class="admin-popover-textarea" rows="10"></textarea>
+                  <div class="admin-mail-actions">
+                    <button type="button" id="mailTplSaveBtn" class="btn-primary btn-sm">본문 저장</button>
+                    <button type="button" id="mailTplResetBtn" class="admin-text-btn">기본 문구로 되돌리기</button>
+                  </div>
+                </div>
                 <button type="button" id="adminLogout" class="admin-menu-item admin-menu-item-muted">로그아웃</button>
               </div>
               <p id="adminStatus" class="admin-popover-status hidden" aria-hidden="true"></p>

@@ -241,6 +241,7 @@ function setAdminUi({ passwordSetup = state.passwordSetup } = {}) {
   if (unlocked) {
     const toolsEmail = $("#adminToolsEmail");
     if (toolsEmail) toolsEmail.textContent = state.userEmail;
+    fillMailTemplateForm();
   }
 }
 
@@ -359,12 +360,20 @@ async function copyPromo(c) {
   const text = `${mail.subject}\n\n${mail.body}`;
   try {
     await navigator.clipboard.writeText(text);
-    $("#status").textContent = "프로모 메일 문구 복사됨";
+    $("#status").textContent = "프로모 메일 문구 복사됨 (공용 본문 사용)";
   } catch {
     const href = TOfferSupabase.mailtoHref(mail);
     window.open(href, "_blank");
     $("#status").textContent = "메일 앱으로 열림";
   }
+}
+
+function fillMailTemplateForm() {
+  const tpl = TOfferSupabase.loadMailTemplate();
+  const subject = $("#mailTplSubject");
+  const body = $("#mailTplBody");
+  if (subject) subject.value = tpl.subject;
+  if (body) body.value = tpl.body;
 }
 
 async function recommendCompany(c, on = true) {
@@ -947,43 +956,70 @@ async function handleRowAction(act, id) {
 }
 
 function bindAuth() {
+  let authBusy = false;
   $("#adminUnlockBtn")?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleAdminPopover();
   });
   document.addEventListener("click", (e) => {
+    if (authBusy) return;
     const pop = $("#adminPopover");
     if (!pop || pop.classList.contains("hidden")) return;
     if (e.target.closest("#adminPopover") || e.target.closest("#adminUnlockBtn")) return;
     closeAdminPopover();
   });
-  $("#adminLoginBtn")?.addEventListener("click", async () => {
+
+  async function doLogin() {
+    if (authBusy) return;
+    const btn = $("#adminLoginBtn");
+    authBusy = true;
+    if (btn) btn.disabled = true;
     try {
       setAdminStatus("로그인 중…");
-      await window.TOfferAuth.signIn($("#adminEmail").value, $("#adminPassword").value);
-      state.userEmail = await window.TOfferAuth.getUserEmail();
+      const result = await window.TOfferAuth.signIn($("#adminEmail").value, $("#adminPassword").value);
+      state.userEmail = result?.email || (await window.TOfferAuth.getUserEmail());
       state.passwordSetup = false;
       setAdminUi();
       setAdminStatus("로그인됨");
-      closeAdminPopover();
       $("#status").textContent = "로그인됨 — 편집·추천·제외 가능";
       renderList();
       if (state.detailId) paintDetail();
+      // Keep popover open so mail template is visible after login.
+      openAdminPopover();
     } catch (err) {
+      console.error(err);
       setAdminStatus(err.message || "로그인 실패");
+    } finally {
+      authBusy = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  $("#adminLoginBtn")?.addEventListener("click", () => void doLogin());
+  $("#adminPassword")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void doLogin();
     }
   });
   $("#adminSetupEmailBtn")?.addEventListener("click", async () => {
+    if (authBusy) return;
+    authBusy = true;
     try {
       const email = $("#adminEmail").value;
       setAdminStatus("설정 메일 발송 중…");
       await window.TOfferAuth.sendPasswordSetupEmail(email);
       setAdminStatus("설정 메일을 보냈습니다. 메일 링크로 들어와 비밀번호를 설정하세요.");
     } catch (err) {
+      console.error(err);
       setAdminStatus(err.message || "메일 발송 실패");
+    } finally {
+      authBusy = false;
     }
   });
   $("#adminPasswordSaveBtn")?.addEventListener("click", async () => {
+    if (authBusy) return;
+    authBusy = true;
     try {
       const a = $("#adminNewPassword").value;
       const b = $("#adminConfirmPassword").value;
@@ -992,12 +1028,28 @@ function bindAuth() {
       state.userEmail = await window.TOfferAuth.getUserEmail();
       state.passwordSetup = false;
       setAdminUi();
-      setAdminStatus("비밀번호가 저장되었습니다.");
-      closeAdminPopover();
+      setAdminStatus("비밀번호가 저장되었습니다. 이제 로그인된 상태입니다.");
       history.replaceState(null, "", window.location.pathname + window.location.search);
+      openAdminPopover();
     } catch (err) {
+      console.error(err);
       setAdminStatus(err.message || "비밀번호 저장 실패");
+    } finally {
+      authBusy = false;
     }
+  });
+  $("#mailTplSaveBtn")?.addEventListener("click", () => {
+    TOfferSupabase.saveMailTemplate({
+      subject: $("#mailTplSubject")?.value,
+      body: $("#mailTplBody")?.value
+    });
+    setAdminStatus("메일 본문을 저장했습니다. 「메일문구」복사에 바로 반영됩니다.");
+    $("#status").textContent = "메일 본문 저장됨";
+  });
+  $("#mailTplResetBtn")?.addEventListener("click", () => {
+    const tpl = TOfferSupabase.resetMailTemplate();
+    fillMailTemplateForm();
+    setAdminStatus("기본 메일 본문으로 되돌렸습니다.");
   });
   $("#adminLogout")?.addEventListener("click", async () => {
     await window.TOfferAuth.signOut();
@@ -1084,28 +1136,34 @@ function bind() {
 bind();
 setAdminUi();
 if (window.TOfferAuth) {
-  window.TOfferAuth.getUserEmail().then((email) => {
-    state.userEmail = email;
-    if (window.location.hash.includes("type=recovery")) {
-      state.passwordSetup = true;
-      setAdminUi({ passwordSetup: true });
-      openAdminPopover();
-    } else {
+  window.TOfferAuth.getUserEmail()
+    .then((email) => {
+      state.userEmail = email;
+      if (window.location.hash.includes("type=recovery")) {
+        state.passwordSetup = true;
+        setAdminUi({ passwordSetup: true });
+        openAdminPopover();
+      } else {
+        setAdminUi();
+      }
+      renderList();
+    })
+    .catch((err) => {
+      console.warn("session restore failed", err);
+      state.userEmail = "";
       setAdminUi();
-    }
-    renderList();
-  });
-  window.TOfferAuth.onAuthStateChange(async (event) => {
-    state.userEmail = await window.TOfferAuth.getUserEmail();
+    });
+  window.TOfferAuth.onAuthStateChange((event, session) => {
+    state.userEmail = session?.user?.email?.toLowerCase() || "";
     if (event === "PASSWORD_RECOVERY") {
       state.passwordSetup = true;
       setAdminUi({ passwordSetup: true });
       openAdminPopover();
-    } else {
+    } else if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
       setAdminUi();
+      renderList();
+      if (state.detailId) paintDetail();
     }
-    renderList();
-    if (state.detailId) paintDetail();
   });
 }
 load();
