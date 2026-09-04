@@ -44,6 +44,10 @@ async function rpc(name, args = {}, { auth = false } = {}) {
 export const TOfferSupabase = {
   getDashboard: () => rpc("get_offer_dashboard"),
   getSnapshot: () => rpc("get_offer_published_snapshot"),
+  /** Same Client board universe (~2k companies). */
+  getPublishedSnapshot: () => rpc("get_published_snapshot"),
+  getLeadDashboard: () => rpc("get_lead_dashboard"),
+  getOfferSalesManagementAll: () => rpc("get_offer_sales_management_all"),
   getCompanyEditsAll: () => rpc("get_company_edits_all"),
   checkEmailAllowed: (email) => rpc("check_email_allowed", { addr: email }),
   upsertSalesManagement: (companyId, patch) =>

@@ -28,16 +28,24 @@ const SOURCE_LABELS = {
 const state = {
   view: "companies",
   tab: "new",
-  empFilter: "all",
+  empFilter: "alba",
   postFilter: "open",
+  /** Active list for current emp tab */
   companies: [],
+  /** Offer leads only (알바 소스) */
+  offerCompanies: [],
+  /** T-Client universe (전체) */
+  allCompanies: [],
   posts: [],
+  clientPosts: [],
   edits: {},
+  offerMgmt: {},
   query: "",
   userEmail: "",
   busyId: "",
   detailId: "",
-  passwordSetup: false
+  passwordSetup: false,
+  generatedAt: ""
 };
 
 function $(sel) {
@@ -63,10 +71,29 @@ function displayName(c) {
 }
 
 function companyName(id) {
-  const c = state.companies.find((x) => x.company_id === id || x.companyId === id);
+  const c =
+    state.companies.find((x) => x.company_id === id || x.companyId === id) ||
+    state.offerCompanies.find((x) => x.company_id === id) ||
+    state.allCompanies.find((x) => x.company_id === id);
   if (c) return displayName(c);
   const edit = state.edits[id];
   return edit?.companyNameKo || id || "—";
+}
+
+function findCompany(id) {
+  return (
+    state.companies.find((x) => x.company_id === id) ||
+    state.offerCompanies.find((x) => x.company_id === id) ||
+    state.allCompanies.find((x) => x.company_id === id) ||
+    null
+  );
+}
+
+function syncCompanyEverywhere(companyId, mutator) {
+  for (const list of [state.companies, state.offerCompanies, state.allCompanies]) {
+    const c = list.find((x) => x.company_id === companyId);
+    if (c) mutator(c);
+  }
 }
 
 function contactOf(c) {
@@ -114,19 +141,93 @@ function matchesEmpFilter(p) {
 }
 
 function matchesPostFilter(p) {
-  if (!matchesEmpFilter(p)) return false;
+  if (state.empFilter === "alba") {
+    if ((p.classify_label || p.classifyLabel) === "client") return false;
+    if (!isAlbaPost(p)) return false;
+  }
   if (state.postFilter === "all") return true;
   return postStatusOf(p) === state.postFilter;
 }
 
+function listViewPosts() {
+  if (state.empFilter === "all" && state.clientPosts.length) {
+    return state.clientPosts;
+  }
+  return offerPosts().filter((p) => (state.empFilter === "all" ? true : isAlbaPost(p)));
+}
+
 function companyHasVisiblePost(c) {
   if (isExcluded(c) && state.tab === "excluded") return true;
+  // 전체 = T-Client 회사 전부 (공고 유무 무관)
+  if (state.empFilter === "all") return true;
   const id = c.company_id || c.companyId;
   const posts = offerPosts().filter((p) => (p.company_id || p.companyId) === id);
-  // 전체: 공고 없어도 회사 행 유지 (Client 전체와 동일)
-  if (state.empFilter === "all") return true;
-  // 알바: 알바 공고가 하나라도 있는 회사만
   return posts.some(isAlbaPost);
+}
+
+function rebuildActiveCompanies() {
+  if (state.empFilter === "alba") {
+    state.companies = state.offerCompanies.slice();
+  } else {
+    state.companies = state.allCompanies.slice();
+  }
+}
+
+function mapClientRow(row, offerMap) {
+  const id = row.companyId || row.company_id;
+  const offer = offerMap.get(id) || {};
+  const mgmt = state.offerMgmt[id] || {};
+  const posts = Array.isArray(row.posts) ? row.posts : [];
+  const first = posts[0] || {};
+  return {
+    company_id: id,
+    company_name: row.companyNameKo || row.companyName || offer.company_name || id,
+    domain: row.domain || offer.domain || "",
+    homepage: row.profile?.homepage || offer.homepage || "",
+    company_tier: row.companyTier || offer.company_tier || "",
+    contact_name: offer.contact_name || "",
+    contact_phone: offer.contact_phone || "",
+    contact_email: row.email || offer.contact_email || "",
+    lead_grade: row.leadGrade || offer.lead_grade || "C",
+    priority_score: row.priorityScore ?? offer.priority_score ?? 0,
+    score_reason: row.scoreReason || offer.score_reason || "",
+    latest_offer_title: offer.latest_offer_title || first.title || "",
+    latest_offer_url: offer.latest_offer_url || first.url || "",
+    offer_post_count: offer.offer_post_count || 0,
+    is_recommended: offer.is_recommended ?? mgmt.isRecommended ?? false,
+    is_hidden: offer.is_hidden ?? mgmt.isHidden ?? !!(row.excluded || row.excludeReason),
+    stage: offer.stage || mgmt.stage || "new",
+    status: offer.status || mgmt.status || "active",
+    mail_status: offer.mail_status || mgmt.mailStatus || "none",
+    mailed_at: offer.mailed_at || mgmt.mailedAt || null,
+    memo: offer.memo || mgmt.memo || "",
+    recommend_score: offer.recommend_score ?? mgmt.recommendScore ?? 0,
+    closed_reason: offer.closed_reason || mgmt.closedReason || "",
+    exclude_reason: row.excludeReason || offer.exclude_reason || "",
+    _pool: "client",
+    _clientPosts: posts
+  };
+}
+
+function flattenClientPosts(rows) {
+  const out = [];
+  for (const row of rows || []) {
+    const id = row.companyId || row.company_id;
+    for (const p of row.posts || []) {
+      out.push({
+        company_id: id,
+        title: p.title,
+        url: p.url,
+        source: p.source,
+        status: p.status || "open",
+        classify_label: "client",
+        collected_at: p.collectedAt || p.collected_at || "",
+        employment_type: "",
+        part_time_score: 0
+      });
+    }
+  }
+  return out;
 }
 
 function sourceOfCompany(c) {
@@ -140,19 +241,29 @@ function sourceOfCompany(c) {
   return post?.source || c.source || "";
 }
 
+function postsForCompany(c) {
+  const id = c.company_id || c.companyId;
+  const offer = offerPosts().filter((p) => (p.company_id || p.companyId) === id);
+  if (offer.length) return offer;
+  if (Array.isArray(c._clientPosts) && c._clientPosts.length) {
+    return c._clientPosts.map((p) => ({
+      ...p,
+      company_id: id,
+      classify_label: "client",
+      collected_at: p.collectedAt || p.collected_at || ""
+    }));
+  }
+  return state.clientPosts.filter((p) => p.company_id === id);
+}
+
 function latestPostForCompany(c) {
   const id = c.company_id || c.companyId;
   const url = c.latest_offer_url || c.latestOfferUrl || "";
-  const byUrl = state.posts.find((p) => p.url === url);
+  const byUrl = state.posts.find((p) => p.url === url) || state.clientPosts.find((p) => p.url === url);
   if (byUrl) return byUrl;
-  const list = offerPosts().filter((p) => (p.company_id || p.companyId) === id);
+  const list = postsForCompany(c);
   const open = list.find((p) => !isClosedPost(p));
   return open || list[0] || null;
-}
-
-function postsForCompany(c) {
-  const id = c.company_id || c.companyId;
-  return offerPosts().filter((p) => (p.company_id || p.companyId) === id);
 }
 
 function matchesTab(c) {
@@ -310,9 +421,16 @@ async function patchCompany(companyId, patch) {
   $("#status").textContent = "저장 중…";
   try {
     const out = await TOfferSupabase.upsertSalesManagement(companyId, patch);
-    const c = state.companies.find((x) => x.company_id === companyId);
-    if (out) applyRpcOut(c, out);
-    else applyLocalPatch(c, patch);
+    syncCompanyEverywhere(companyId, (c) => {
+      if (out) applyRpcOut(c, out);
+      else applyLocalPatch(c, patch);
+    });
+    // Ensure offer pool has this company after first CRM write from 전체 tab
+    if (!state.offerCompanies.some((x) => x.company_id === companyId)) {
+      const c = findCompany(companyId);
+      if (c) state.offerCompanies.push({ ...c });
+    }
+    rebuildActiveCompanies();
     renderList();
     if (state.detailId === companyId) paintDetail();
     $("#status").textContent = "저장됨";
@@ -352,6 +470,11 @@ async function saveCompanyEdit(companyId, patch) {
   if (c && patch.companyNameKo) c.company_name = patch.companyNameKo;
   if (c && patch.domain) c.domain = patch.domain;
   if (c && patch.profile?.homepage) c.homepage = patch.profile.homepage;
+  syncCompanyEverywhere(companyId, (row) => {
+    if (patch.companyNameKo) row.company_name = patch.companyNameKo;
+    if (patch.domain) row.domain = patch.domain;
+    if (patch.profile?.homepage) row.homepage = patch.profile.homepage;
+  });
   renderList();
   if (state.detailId === companyId) paintDetail();
   $("#status").textContent = "회사 정보 저장됨";
@@ -470,20 +593,22 @@ function updateCounts() {
     if (el) el.textContent = String(v);
   }
 
-  const posts = offerPosts();
+  const viewPosts = listViewPosts();
   const postBuckets = {
-    all: posts.filter(matchesEmpFilter).length,
-    open: posts.filter((p) => matchesEmpFilter(p) && !isClosedPost(p)).length,
-    closed: posts.filter((p) => matchesEmpFilter(p) && isClosedPost(p)).length
+    all: viewPosts.filter((p) => state.postFilter === "all" || true).length,
+    open: viewPosts.filter((p) => !isClosedPost(p)).length,
+    closed: viewPosts.filter((p) => isClosedPost(p)).length
   };
+  // recompute with post filter awareness for display counts of status tabs
+  postBuckets.all = viewPosts.length;
   for (const [k, v] of Object.entries(postBuckets)) {
     const el = document.querySelector(`[data-post-count="${k}"]`);
     if (el) el.textContent = String(v);
   }
-  // emp tab counts: 전체 = Offer 공고 전부, 알바 = 알바 분류만
+  // emp tab counts: 알바 = Offer 알바 공고, 전체 = T-Client 회사 수
   const empBuckets = {
-    all: posts.length,
-    alba: posts.filter(isAlbaPost).length
+    alba: offerPosts().filter(isAlbaPost).length,
+    all: state.allCompanies.length || state.offerCompanies.length
   };
   for (const [k, v] of Object.entries(empBuckets)) {
     const el = document.querySelector(`[data-emp-count="${k}"]`);
@@ -492,11 +617,14 @@ function updateCounts() {
 }
 
 function renderMeta(data) {
-  const n = (data.companies || []).filter((c) => !isExcluded(c)).length;
+  const nOffer = state.offerCompanies.filter((c) => !isExcluded(c)).length;
+  const nAll = state.allCompanies.length;
   const posts = offerPosts();
+  const alba = posts.filter(isAlbaPost).length;
   const closed = posts.filter((p) => isClosedPost(p)).length;
   const open = posts.length - closed;
-  $("#metaLine").textContent = `회사 ${n} · 공고 ${posts.length} (모집 ${open} · 마감 ${closed}) · ${formatTime(data.generatedAt)}`;
+  $("#metaLine").textContent =
+    `전체 ${nAll} · 알바회사 ${nOffer} · 알바공고 ${alba}/${posts.length} (모집 ${open}·마감 ${closed}) · ${formatTime(data.generatedAt || state.generatedAt)}`;
 }
 
 function setView(view) {
@@ -571,7 +699,7 @@ function renderCompanies() {
 function renderPosts() {
   const body = $("#postsBody");
   const empty = $("#empty");
-  const rows = offerPosts().filter(matchesPostFilter).filter(matchesQueryPost);
+  const rows = listViewPosts().filter(matchesPostFilter).filter(matchesQueryPost);
   $("#leadBody").innerHTML = "";
   updateCounts();
   if (!rows.length) {
@@ -617,7 +745,7 @@ function poolOf(c) {
 }
 
 function paintDetail() {
-  const c = state.companies.find((x) => x.company_id === state.detailId);
+  const c = findCompany(state.detailId);
   const drawer = $("#detailDrawer");
   if (!c || !drawer) {
     closeDetail();
@@ -844,7 +972,7 @@ async function saveDetailForm(c) {
 }
 
 function openDetail(companyId) {
-  const c = state.companies.find((x) => x.company_id === companyId);
+  const c = findCompany(companyId);
   if (!c) return;
   state.detailId = companyId;
   const drawer = $("#detailDrawer");
@@ -865,50 +993,87 @@ function closeDetail() {
 }
 
 function mergeEditsIntoCompanies() {
-  for (const c of state.companies) {
-    const edit = state.edits[c.company_id];
-    if (!edit) continue;
-    if (edit.companyNameKo) c.company_name = edit.companyNameKo;
-    if (edit.domain) c.domain = edit.domain;
-    if (edit.profile?.homepage) c.homepage = edit.profile.homepage;
+  for (const list of [state.offerCompanies, state.allCompanies, state.companies]) {
+    for (const c of list) {
+      const edit = state.edits[c.company_id];
+      if (!edit) continue;
+      if (edit.companyNameKo) c.company_name = edit.companyNameKo;
+      if (edit.domain) c.domain = edit.domain;
+      if (edit.profile?.homepage) c.homepage = edit.profile.homepage;
+    }
+  }
+}
+
+async function loadOfferData() {
+  try {
+    return await TOfferSupabase.getDashboard();
+  } catch {
+    const snap = await TOfferSupabase.getSnapshot();
+    return {
+      generatedAt: snap.generatedAt,
+      companies: (snap.companies || []).map((c) => ({
+        company_id: c.companyId,
+        company_name: c.companyName,
+        lead_grade: c.leadGrade,
+        priority_score: c.priorityScore,
+        latest_offer_title: c.latestOfferTitle,
+        latest_offer_url: c.latestOfferUrl,
+        offer_post_count: c.offerPostCount,
+        stage: "new",
+        mail_status: "none",
+        is_hidden: false,
+        is_recommended: false,
+        closed_reason: ""
+      })),
+      posts: (snap.posts || []).map((p) => ({
+        ...p,
+        company_id: p.companyId,
+        classify_label: "offer",
+        status: p.status || "open",
+        collected_at: p.collectedAt
+      }))
+    };
+  }
+}
+
+async function loadClientUniverse() {
+  try {
+    const snap = await TOfferSupabase.getPublishedSnapshot();
+    if (snap?.rows?.length) return snap;
+  } catch (err) {
+    console.warn("published snapshot failed", err);
+  }
+  try {
+    return await TOfferSupabase.getLeadDashboard();
+  } catch (err) {
+    console.warn("lead dashboard failed", err);
+    return { rows: [], generatedAt: "" };
   }
 }
 
 async function load() {
   $("#status").textContent = "불러오는 중…";
   try {
-    let data;
-    try {
-      data = await TOfferSupabase.getDashboard();
-    } catch {
-      const snap = await TOfferSupabase.getSnapshot();
-      data = {
-        generatedAt: snap.generatedAt,
-        companies: (snap.companies || []).map((c) => ({
-          company_id: c.companyId,
-          company_name: c.companyName,
-          lead_grade: c.leadGrade,
-          priority_score: c.priorityScore,
-          latest_offer_title: c.latestOfferTitle,
-          latest_offer_url: c.latestOfferUrl,
-          offer_post_count: c.offerPostCount,
-          stage: "new",
-          mail_status: "none",
-          is_hidden: false,
-          is_recommended: false,
-          closed_reason: ""
-        })),
-        posts: (snap.posts || []).map((p) => ({
-          ...p,
-          company_id: p.companyId,
-          classify_label: "offer",
-          status: p.status || "open",
-          collected_at: p.collectedAt
-        }))
-      };
+    const [offerData, clientData, mgmt] = await Promise.all([
+      loadOfferData(),
+      loadClientUniverse(),
+      TOfferSupabase.getOfferSalesManagementAll().catch(() => ({}))
+    ]);
+    state.offerMgmt = mgmt || {};
+    state.offerCompanies = offerData.companies || [];
+    state.posts = offerData.posts || [];
+    state.generatedAt = offerData.generatedAt || clientData.generatedAt || "";
+
+    const offerMap = new Map(state.offerCompanies.map((c) => [c.company_id, c]));
+    const clientRows = clientData.rows || [];
+    state.allCompanies = clientRows.map((r) => mapClientRow(r, offerMap));
+    state.clientPosts = flattenClientPosts(clientRows);
+
+    // If Client snapshot empty, fall back so 전체 still shows Offer leads
+    if (!state.allCompanies.length) {
+      state.allCompanies = state.offerCompanies.slice();
     }
-    state.companies = data.companies || [];
-    state.posts = data.posts || [];
+
     try {
       state.edits = (await TOfferSupabase.getCompanyEditsAll()) || {};
       mergeEditsIntoCompanies();
@@ -916,7 +1081,9 @@ async function load() {
       console.warn("company edits load failed", err);
       state.edits = {};
     }
-    renderMeta(data);
+
+    rebuildActiveCompanies();
+    renderMeta({ generatedAt: state.generatedAt });
     renderList();
     if (state.detailId) paintDetail();
     $("#status").textContent = state.userEmail ? "준비됨 (로그인)" : "준비됨 — 편집은 「관리」로그인 필요";
@@ -930,7 +1097,7 @@ async function load() {
 }
 
 async function handleRowAction(act, id) {
-  const c = state.companies.find((x) => x.company_id === id);
+  const c = findCompany(id);
   if (!c) return;
   if (act === "promo") {
     await copyPromo(c);
@@ -1092,6 +1259,7 @@ function bind() {
       document.querySelectorAll("[data-emp-filter]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.empFilter = btn.getAttribute("data-emp-filter");
+      rebuildActiveCompanies();
       renderList();
     });
   });
@@ -1125,16 +1293,16 @@ function bind() {
     if (e.target.closest("[data-close-detail]")) closeDetail();
   });
   $("#detailRecommendBtn")?.addEventListener("click", async () => {
-    const c = state.companies.find((x) => x.company_id === state.detailId);
+    const c = findCompany(state.detailId);
     if (!c) return;
     await recommendCompany(c, !c.is_recommended);
   });
   $("#detailExcludeBtn")?.addEventListener("click", async () => {
-    const c = state.companies.find((x) => x.company_id === state.detailId);
+    const c = findCompany(state.detailId);
     if (c) await excludeCompany(c);
   });
   $("#detailRestoreBtn")?.addEventListener("click", async () => {
-    const c = state.companies.find((x) => x.company_id === state.detailId);
+    const c = findCompany(state.detailId);
     if (c) await restoreCompany(c);
   });
   document.addEventListener("keydown", (e) => {
