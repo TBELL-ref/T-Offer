@@ -1421,28 +1421,49 @@ function mergeEditsIntoCompanies() {
 
 async function copyPromo(c) {
   const latest = latestPostForCompany(c);
-  const mail = TOfferSupabase.buildPromoMail({
-    companyName: displayName(c),
-    postTitle: c.latest_offer_title || latest?.title,
-    postUrl: c.latest_offer_url || latest?.url
-  });
-  const text = `${mail.subject}\n\n${mail.body}`;
   try {
-    await navigator.clipboard.writeText(text);
-    $("#status").textContent = "프로모 메일 문구 복사됨 (공용 본문 사용)";
-  } catch {
-    const href = TOfferSupabase.mailtoHref(mail);
-    window.open(href, "_blank");
-    $("#status").textContent = "메일 앱으로 열림";
+    const mail = await TOfferSupabase.buildPromoMailAsync({
+      companyName: displayName(c),
+      postTitle: c.latest_offer_title || latest?.title,
+      postUrl: c.latest_offer_url || latest?.url
+    });
+    const mode = await TOfferSupabase.copyPromoToClipboard(mail);
+    $("#status").textContent =
+      mode === "html"
+        ? "HTML 메일 본문 복사됨 — Outlook/Gmail에 붙여넣기"
+        : "메일 문구 복사됨 (공용 본문 사용)";
+  } catch (err) {
+    console.warn(err);
+    try {
+      const mail = TOfferSupabase.buildPromoMail({
+        companyName: displayName(c),
+        postTitle: c.latest_offer_title || latest?.title,
+        postUrl: c.latest_offer_url || latest?.url
+      });
+      const href = TOfferSupabase.mailtoHref(mail);
+      window.open(href, "_blank");
+      $("#status").textContent = "메일 앱으로 열림 (본문은 템플릿에서 복사해 주세요)";
+    } catch (err2) {
+      $("#status").textContent = `메일 복사 실패: ${err2.message || err2}`;
+    }
   }
 }
 
-function fillMailTemplateForm() {
-  const tpl = TOfferSupabase.loadMailTemplate();
-  const subject = $("#mailTplSubject");
-  const body = $("#mailTplBody");
-  if (subject) subject.value = tpl.subject;
-  if (body) body.value = tpl.body;
+async function fillMailTemplateForm() {
+  try {
+    const tpl = await TOfferSupabase.ensureMailTemplate();
+    const subject = $("#mailTplSubject");
+    const body = $("#mailTplBody");
+    if (subject) subject.value = tpl.subject;
+    if (body) body.value = tpl.body;
+  } catch (err) {
+    console.warn("mail template load failed", err);
+    const tpl = TOfferSupabase.loadMailTemplate();
+    const subject = $("#mailTplSubject");
+    const body = $("#mailTplBody");
+    if (subject) subject.value = tpl.subject;
+    if (body) body.value = tpl.body || "(HTML 템플릿을 불러오지 못했습니다. 새로고침 후 다시 시도)";
+  }
 }
 
 async function recommendCompany(c, on = true) {
@@ -2167,15 +2188,16 @@ function bindAuth() {
   $("#mailTplSaveBtn")?.addEventListener("click", () => {
     TOfferSupabase.saveMailTemplate({
       subject: $("#mailTplSubject")?.value,
-      body: $("#mailTplBody")?.value
+      body: $("#mailTplBody")?.value,
+      isHtml: true
     });
     setAdminStatus("메일 본문을 저장했습니다. 「메일문구」복사에 바로 반영됩니다.");
     $("#status").textContent = "메일 본문 저장됨";
   });
-  $("#mailTplResetBtn")?.addEventListener("click", () => {
-    const tpl = TOfferSupabase.resetMailTemplate();
-    fillMailTemplateForm();
-    setAdminStatus("기본 메일 본문으로 되돌렸습니다.");
+  $("#mailTplResetBtn")?.addEventListener("click", async () => {
+    await TOfferSupabase.resetMailTemplate();
+    await fillMailTemplateForm();
+    setAdminStatus("기본 티어시 HTML 메일로 되돌렸습니다.");
   });
   $("#adminLogout")?.addEventListener("click", async () => {
     await window.TOfferAuth.signOut();

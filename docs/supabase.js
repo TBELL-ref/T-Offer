@@ -1,7 +1,10 @@
 import {
   buildPromoMail,
+  buildPromoMailAsync,
+  copyPromoToClipboard,
   mailtoHref,
   loadMailTemplate,
+  ensureMailTemplate,
   saveMailTemplate,
   resetMailTemplate,
   DEFAULT_MAIL_TEMPLATE
@@ -59,8 +62,11 @@ export const TOfferSupabase = {
   upsertCompanyEdit: (companyId, patch) =>
     rpc("upsert_company_edit", { p_company_id: companyId, p_patch: patch }, { auth: true }),
   buildPromoMail,
+  buildPromoMailAsync,
+  copyPromoToClipboard,
   mailtoHref,
   loadMailTemplate,
+  ensureMailTemplate,
   saveMailTemplate,
   resetMailTemplate,
   DEFAULT_MAIL_TEMPLATE
