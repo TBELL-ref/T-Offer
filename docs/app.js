@@ -396,6 +396,35 @@ function renderPager(total, pages) {
   $("#pagerNext").disabled = state.page >= pages;
 }
 
+function applyOfferProfile(c, offer = {}) {
+  if (!c) return c;
+  const homepage = pickStr(c.homepage, offer.homepage, offer.service_url, offer.serviceUrl);
+  const bizNo = pickStr(c.biz_no, offer.biz_no, offer.bizNo);
+  const bizItem = pickStr(c.biz_item, offer.biz_item, offer.bizItem, offer.industry_summary);
+  c.homepage = homepage || c.homepage || "";
+  c.biz_no = bizNo || c.biz_no || "";
+  c.biz_item = bizItem || c.biz_item || "";
+  c.profile = {
+    ...(c.profile || {}),
+    homepage: pickStr(c.profile?.homepage, homepage),
+    serviceUrl: pickStr(c.profile?.serviceUrl, offer.service_url, offer.serviceUrl),
+    bizNo: pickStr(c.profile?.bizNo, bizNo),
+    bizItem: pickStr(c.profile?.bizItem, bizItem),
+    industrySummary: pickStr(c.profile?.industrySummary, offer.industry_summary, bizItem)
+  };
+  if (offer.contact_email && !c.contact_email) c.contact_email = offer.contact_email;
+  return c;
+}
+
+function hydrateProfilesFromOfferCompanies() {
+  const offerMap = new Map((state.offerCompanies || []).map((c) => [c.company_id, c]));
+  for (const list of [state.allCompanies, state.companies, state.offerCompanies]) {
+    for (const c of list || []) {
+      applyOfferProfile(c, offerMap.get(c.company_id) || c);
+    }
+  }
+}
+
 function mapClientRow(row, offerMap) {
   const id = row.companyId || row.company_id;
   const offer = offerMap.get(id) || {};
@@ -407,6 +436,8 @@ function mapClientRow(row, offerMap) {
     profile.homepage,
     profile.serviceUrl,
     offer.homepage,
+    offer.service_url,
+    offer.serviceUrl,
     row.domain ? `https://${row.domain}` : ""
   );
   // Keep only a slim first-post hint — full Client post arrays cause UI jank.
@@ -415,10 +446,17 @@ function mapClientRow(row, offerMap) {
     company_name: row.companyNameKo || row.companyName || offer.company_name || id,
     domain: row.domain || offer.domain || "",
     homepage,
-    biz_no: pickStr(profile.bizNo, profile.biz_no, offer.biz_no),
-    biz_item: pickStr(profile.bizItem, profile.biz_item, profile.industrySummary),
+    biz_no: pickStr(profile.bizNo, profile.biz_no, offer.biz_no, offer.bizNo),
+    biz_item: pickStr(profile.bizItem, profile.biz_item, profile.industrySummary, offer.biz_item, offer.industry_summary),
     company_tier: row.companyTier || offer.company_tier || "",
-    profile,
+    profile: {
+      ...profile,
+      homepage: pickStr(profile.homepage, homepage),
+      serviceUrl: pickStr(profile.serviceUrl, offer.service_url, offer.serviceUrl),
+      bizNo: pickStr(profile.bizNo, offer.biz_no, offer.bizNo),
+      bizItem: pickStr(profile.bizItem, offer.biz_item),
+      industrySummary: pickStr(profile.industrySummary, offer.industry_summary, offer.biz_item)
+    },
     contact: row.contact || {},
     contact_name: row.contact?.name || offer.contact_name || "",
     contact_phone: row.contact?.phone || offer.contact_phone || "",
@@ -1793,6 +1831,13 @@ async function load() {
     const offerMap = new Map(state.offerCompanies.map((c) => [c.company_id, c]));
     state.allCompanies = (state.clientRows.length ? state.clientRows : []).map((r) => mapClientRow(r, offerMap));
     if (!state.allCompanies.length) state.allCompanies = state.offerCompanies.slice();
+    // Offer-only / snapshot-empty firms: keep dashboard company profile fields.
+    for (const offer of state.offerCompanies) {
+      const existing = state.allCompanies.find((c) => c.company_id === offer.company_id);
+      if (existing) applyOfferProfile(existing, offer);
+      else state.allCompanies.push(applyOfferProfile({ ...offer }, offer));
+    }
+    hydrateProfilesFromOfferCompanies();
 
     // Sync alba tags from server management when available (non-blocking)
     TOfferSupabase.getOfferSalesManagementAll()
@@ -1823,6 +1868,7 @@ async function load() {
 
     // Sheet columns need contacts/profile — load edits after first paint
     void ensureCompanyEditsLoaded().then(() => {
+      hydrateProfilesFromOfferCompanies();
       ensureMgmtCompaniesPresent();
       rebuildActiveCompanies();
       renderList();
