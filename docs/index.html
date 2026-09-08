@@ -84,22 +84,29 @@
 
     <div class="toolbar">
       <div class="search-box">
-        <input id="search" type="search" placeholder="회사 · 공고 · 소스 검색" />
+        <input id="search" type="search" placeholder="회사 · 담당자 · 메일 · 업종 검색" />
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="exportCsvBtn" class="btn-ghost">CSV 내보내기</button>
       </div>
       <div id="status" class="status">…</div>
     </div>
 
     <div class="table-wrap">
-      <table class="leads-table" id="companyTable" aria-label="Offer 회사">
+      <table class="leads-table sheet-table" id="companyTable" aria-label="Offer 회사">
         <thead>
           <tr>
-            <th class="col-grade">등급</th>
-            <th class="col-co">회사</th>
-            <th class="col-post">최근 공고</th>
-            <th class="col-src">소스</th>
-            <th class="col-stage">단계</th>
-            <th class="col-mail">메일</th>
-            <th class="col-score">점수</th>
+            <th class="col-no">#</th>
+            <th class="col-co">업체명</th>
+            <th class="col-biz">사업자 번호</th>
+            <th class="col-home">홈페이지</th>
+            <th class="col-ind">업종</th>
+            <th class="col-contact">담당자 정보</th>
+            <th class="col-post">공고</th>
+            <th class="col-sent">발송일</th>
+            <th class="col-stage">상태</th>
+            <th class="col-note">비고</th>
+            <th class="col-mail-to">메일</th>
             <th class="col-actions">작업</th>
           </tr>
         </thead>

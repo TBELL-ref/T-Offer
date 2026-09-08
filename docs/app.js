@@ -259,6 +259,55 @@ function isInAlbaPool(c) {
   return state.albaPostCompanyIds.has(id);
 }
 
+function stubCompanyFromMgmt(id, m, edit = {}) {
+  return {
+    company_id: id,
+    company_name: edit.companyNameKo || id,
+    domain: edit.domain || "",
+    homepage: edit.profile?.homepage || "",
+    company_tier: edit.companyTier || "",
+    profile: edit.profile || {},
+    contact: edit.contact || {},
+    contact_name: edit.contact?.name || "",
+    contact_phone: edit.contact?.phone || "",
+    contact_email: edit.contact?.email || "",
+    lead_grade: "C",
+    priority_score: m.recommendScore ?? 0,
+    score_reason: "",
+    latest_offer_title: "",
+    latest_offer_url: "",
+    offer_post_count: 0,
+    is_recommended: !!m.isRecommended,
+    is_hidden: !!m.isHidden,
+    is_alba: !!m.isAlba,
+    stage: m.stage || "new",
+    status: m.status || "active",
+    mail_status: m.mailStatus || "none",
+    mailed_at: m.mailedAt || null,
+    memo: m.memo || "",
+    recommend_score: m.recommendScore ?? 0,
+    closed_reason: m.closedReason || "",
+    exclude_reason: "",
+    remark: "",
+    _pool: "offer_mgmt",
+    _clientPosts: []
+  };
+}
+
+function ensureMgmtCompaniesPresent() {
+  const byId = new Map((state.allCompanies || []).map((c) => [c.company_id, c]));
+  for (const [id, m] of Object.entries(state.offerMgmt || {})) {
+    if (!m) continue;
+    if (!(m.isAlba || m.isRecommended || m.isHidden)) continue;
+    if (byId.has(id)) continue;
+    byId.set(id, stubCompanyFromMgmt(id, m, state.edits[id] || {}));
+  }
+  for (const c of state.offerCompanies || []) {
+    if (!byId.has(c.company_id)) byId.set(c.company_id, c);
+  }
+  state.allCompanies = [...byId.values()];
+}
+
 function rebuildActiveCompanies() {
   if (state.empFilter === "alba") {
     const byId = new Map();
@@ -276,7 +325,27 @@ function rebuildActiveCompanies() {
 }
 
 function filteredCompanyRows() {
-  return state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
+  const rows = state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
+  const order = {
+    cmp_2c277ff9db: 1,
+    offer_굿터치_a5a6ecab: 2,
+    cmp_m_6fc09f95: 3,
+    cmp_ff6a964f83: 4,
+    cmp_2a14834222: 5,
+    cmp_54d36d4d14: 6,
+    cmp_c0ab80433e: 7,
+    cmp_d13c7acd8e: 8,
+    cmp_fda1f5bc63: 9,
+    cmp_72626b228a: 10,
+    cmp_e5ec117cf2: 1,
+    cmp_20c3d6c2b2: 2
+  };
+  return rows.slice().sort((a, b) => {
+    const ao = order[a.company_id] ?? 9999;
+    const bo = order[b.company_id] ?? 9999;
+    if (ao !== bo) return ao - bo;
+    return displayName(a).localeCompare(displayName(b), "ko");
+  });
 }
 
 function pagedSlice(rows) {
@@ -417,16 +486,8 @@ function matchesTab(c) {
 function matchesQueryCompany(c) {
   const q = state.query.trim().toLowerCase();
   if (!q) return true;
-  const contact = contactOf(c);
-  const blob = [
-    displayName(c),
-    c.latest_offer_title,
-    c.domain,
-    c.memo,
-    contact.email,
-    contact.name,
-    sourceOfCompany(c)
-  ]
+  const r = sheetRowOf(c, 0);
+  const blob = [r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.memo, r.mail, r.stage]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -1369,11 +1430,134 @@ function switchTab(tab) {
   renderList();
 }
 
+function industryOf(c) {
+  const p = profileOf(c);
+  return (
+    p.industrySummary ||
+    p.bizItem ||
+    p.biz_item ||
+    p.bizType ||
+    p.biz_type ||
+    c.biz_item ||
+    c.biz_type ||
+    ""
+  );
+}
+
+function bizNoOf(c) {
+  const p = profileOf(c);
+  return p.bizNo || p.biz_no || c.biz_no || "";
+}
+
+function homepageOf(c) {
+  const p = profileOf(c);
+  const edit = state.edits[c.company_id] || {};
+  return p.homepage || c.homepage || edit.profile?.homepage || "";
+}
+
+function contactInfoText(c) {
+  const list = contactsOf(c);
+  if (!list.length) return "";
+  return list
+    .map((ct) => [ct.name, ct.email, ct.phone].filter(Boolean).join(" / "))
+    .join(", ");
+}
+
+function mailToDisplay(c) {
+  const name = displayName(c);
+  const emails = contactsOf(c)
+    .map((ct) => ct.email)
+    .filter(Boolean);
+  if (!emails.length) {
+    const single = contactOf(c).email;
+    if (single) emails.push(single);
+  }
+  if (!emails.length) return "";
+  return emails.map((em) => `"${name}" <${em}>`).join(", ");
+}
+
+function memoOf(c) {
+  const edit = state.edits[c.company_id] || {};
+  return c.memo || edit.notes || c.closed_reason || "";
+}
+
+function mailedAtOf(c) {
+  const raw = c.mailed_at || c.mailedAt || "";
+  if (!raw) return "";
+  try {
+    return new Date(raw).toLocaleDateString("ko-KR");
+  } catch {
+    return `${raw}`.slice(0, 10);
+  }
+}
+
+function sheetRowOf(c, index) {
+  const latest = latestPostForCompany(c);
+  const title = c.latest_offer_title || latest?.title || "";
+  const url = c.latest_offer_url || latest?.url || "";
+  const postLabel = title || (url ? url : "-");
+  return {
+    no: index,
+    name: displayName(c),
+    bizNo: bizNoOf(c),
+    homepage: homepageOf(c),
+    industry: industryOf(c),
+    contact: contactInfoText(c),
+    post: postLabel,
+    postUrl: url,
+    mailedAt: mailedAtOf(c),
+    stage: STAGE_LABELS[stageOf(c)] || stageOf(c),
+    memo: memoOf(c),
+    mail: mailToDisplay(c),
+    companyId: c.company_id,
+    excluded: isExcluded(c)
+  };
+}
+
+function csvEscape(value) {
+  const s = `${value ?? ""}`;
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function exportSheetCsv() {
+  const active = filteredCompanyRows().filter((c) => !isExcluded(c));
+  const excluded = (state.companies || []).filter((c) => isExcluded(c));
+  const headers = ["#", "업체명", "사업자 번호", "홈페이지", "업종", "담당자 정보", "공고", "발송일", "상태", "비고", "메일"];
+  const lines = [headers.map(csvEscape).join(",")];
+  active.forEach((c, i) => {
+    const r = sheetRowOf(c, i + 1);
+    lines.push(
+      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.stage, r.memo, r.mail]
+        .map(csvEscape)
+        .join(",")
+    );
+  });
+  lines.push("");
+  lines.push(["제외", "", "", "", "", "", "", "", "", "", ""].map(csvEscape).join(","));
+  excluded.forEach((c, i) => {
+    const r = sheetRowOf(c, i + 1);
+    lines.push(
+      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.stage, r.memo, r.mail]
+        .map(csvEscape)
+        .join(",")
+    );
+  });
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `t-offer-sheet-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  $("#status").textContent = `CSV 저장 · 진행 ${active.length} / 제외 ${excluded.length}`;
+}
+
 function renderCompanies() {
   const body = $("#leadBody");
   const empty = $("#empty");
   const filtered = filteredCompanyRows();
   const { rows, total, pages } = pagedSlice(filtered);
+  const startNo = (state.page - 1) * PAGE_SIZE;
   updateCounts();
   renderPager(total, pages);
   if (!rows.length) {
@@ -1391,32 +1575,35 @@ function renderCompanies() {
   }
   empty.classList.add("hidden");
   body.innerHTML = rows
-    .map((c) => {
-      const grade = (c.lead_grade || "C").toUpperCase();
-      const gradeClass = grade === "A" ? "badge-a" : grade === "B" ? "badge-b" : "badge-c";
-      const stage = STAGE_LABELS[stageOf(c)] || stageOf(c);
-      const latest = latestPostForCompany(c);
-      const closed = latest ? isClosedPost(latest) : false;
-      const title = c.latest_offer_title || latest?.title || "(공고 없음)";
-      const url = c.latest_offer_url || latest?.url || "";
-      const srcKey = sourceOfCompany(c);
-      const src = SOURCE_LABELS[srcKey] || srcKey || "—";
+    .map((c, i) => {
+      const r = sheetRowOf(c, startNo + i + 1);
       const open = state.detailId === c.company_id;
-      const albaBadge = isInAlbaPool(c) ? ` <span class="badge badge-alba">알바</span>` : "";
-      return `<tr class="${closed ? "row-closed" : ""} ${open ? "is-open" : ""}" data-company-id="${escapeAttr(c.company_id)}">
-        <td><span class="badge ${gradeClass}">${escapeHtml(grade)}</span></td>
-        <td class="co-name" data-open-detail="${escapeAttr(c.company_id)}">${escapeHtml(displayName(c))}${albaBadge}${
-          c.is_recommended && state.empFilter === "alba" ? ` <span class="badge badge-rec">추천</span>` : ""
-        }</td>
-        <td>${
-          url
-            ? `<a class="post-link" href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>`
-            : escapeHtml(title)
-        }${closed ? ` ${statusBadge("closed")}` : ""}</td>
-        <td><span class="badge badge-src">${escapeHtml(src)}</span></td>
-        <td>${escapeHtml(stage)}</td>
-        <td>${escapeHtml(c.mail_status || "none")}</td>
-        <td class="col-score">${escapeHtml(String(c.priority_score ?? 0))}</td>
+      const homeCell = r.homepage
+        ? `<a class="post-link" href="${escapeAttr(r.homepage)}" target="_blank" rel="noopener">${escapeHtml(r.homepage)}</a>`
+        : "—";
+      const postCell = r.postUrl
+        ? `<a class="post-link" href="${escapeAttr(r.postUrl)}" target="_blank" rel="noopener">${escapeHtml(r.post)}</a>`
+        : escapeHtml(r.post || "-");
+      const mailCell = r.mail
+        ? `<a class="post-link" href="mailto:${escapeAttr(
+            contactsOf(c)
+              .map((x) => x.email)
+              .filter(Boolean)
+              .join(",")
+          )}">${escapeHtml(r.mail)}</a>`
+        : `<span class="detail-muted">메일 부재</span>`;
+      return `<tr class="${open ? "is-open" : ""} ${r.excluded ? "row-closed" : ""}" data-company-id="${escapeAttr(c.company_id)}">
+        <td class="col-no">${r.no}</td>
+        <td class="co-name" data-open-detail="${escapeAttr(c.company_id)}">${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.bizNo || "—")}</td>
+        <td class="cell-clip">${homeCell}</td>
+        <td class="cell-clip">${escapeHtml(r.industry || "—")}</td>
+        <td class="cell-clip">${escapeHtml(r.contact || "—")}</td>
+        <td class="cell-clip">${postCell}</td>
+        <td>${escapeHtml(r.mailedAt || "—")}</td>
+        <td>${escapeHtml(r.stage)}</td>
+        <td class="cell-clip" title="${escapeAttr(r.memo)}">${escapeHtml(r.memo || "—")}</td>
+        <td class="cell-clip mail-cell">${mailCell}</td>
         <td class="col-actions">${actionButtons(c)}</td>
       </tr>`;
     })
@@ -1559,11 +1746,20 @@ async function load() {
           if (m?.stage) c.stage = m.stage;
           if (m?.mailStatus) c.mail_status = m.mailStatus;
           if (m?.memo != null) c.memo = m.memo;
+          if (m?.closedReason != null) c.closed_reason = m.closedReason;
         }
+        ensureMgmtCompaniesPresent();
         rebuildActiveCompanies();
         renderList();
       })
       .catch(() => {});
+
+    // Sheet columns need contacts/profile — load edits after first paint
+    void ensureCompanyEditsLoaded().then(() => {
+      ensureMgmtCompaniesPresent();
+      rebuildActiveCompanies();
+      renderList();
+    });
 
     rebuildActiveCompanies();
     renderMeta({ generatedAt: state.generatedAt });
@@ -1571,8 +1767,7 @@ async function load() {
     if (state.detailId) paintDetail();
     $("#status").textContent = state.userEmail ? "준비됨 (로그인)" : "준비됨 — 편집은 「관리」로그인 필요";
 
-    // Edits only when opening detail (avoid multi-MB parse on boot)
-    state.edits = {};
+    // keep state.edits for sheet; ensureCompanyEditsLoaded fills it
   } catch (err) {
     console.error(err);
     $("#status").textContent = "로드 실패";
@@ -1786,6 +1981,7 @@ function bind() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   $("#reload").addEventListener("click", () => load());
+  $("#exportCsvBtn")?.addEventListener("click", () => exportSheetCsv());
 
   $("#companyTable").addEventListener("click", async (e) => {
     const openId = e.target.closest("[data-open-detail]")?.getAttribute("data-open-detail");

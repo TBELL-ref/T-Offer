@@ -25,7 +25,7 @@ body {
 }
 
 .app {
-  max-width: 1280px;
+  max-width: 1480px;
   margin: 0 auto;
   padding: 0 20px 40px;
 }
@@ -140,7 +140,38 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0 12px;
   padding: 12px 0 10px;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+.sheet-table {
+  font-size: 0.82rem;
+  min-width: 1200px;
+}
+.sheet-table th.col-no,
+.sheet-table td.col-no {
+  width: 36px;
+  text-align: center;
+  color: var(--muted);
+}
+.sheet-table .cell-clip {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-table .mail-cell {
+  max-width: 220px;
+}
+.sheet-table .col-note {
+  max-width: 140px;
+}
+.sheet-table .col-actions {
+  white-space: nowrap;
 }
 .search-box { flex: 1; }
 #search {
