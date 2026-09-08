@@ -443,17 +443,17 @@ function filteredCompanyRows() {
     cmp_c0ab80433e: 7,
     cmp_d13c7acd8e: 8,
     cmp_fda1f5bc63: 9,
+    cmp_m_21b98353: 10,
     // 추천
     cmp_e5ec117cf2: 1,
     cmp_72626b228a: 2,
-    cmp_m_21b98353: 3,
-    cmp_n_52e95328: 4,
-    cmp_6d0974d76c: 5,
-    cmp_m_800b227c: 6,
-    cmp_621c56f98a: 7,
-    cmp_bcd87ebc7a: 8,
-    cmp_m_026b97c9: 9,
-    cmp_ad7a591926: 10,
+    cmp_n_52e95328: 3,
+    cmp_6d0974d76c: 4,
+    cmp_m_800b227c: 5,
+    cmp_621c56f98a: 6,
+    cmp_bcd87ebc7a: 7,
+    cmp_m_026b97c9: 8,
+    cmp_ad7a591926: 9,
     // 제외
     cmp_20c3d6c2b2: 1
   };
