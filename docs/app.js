@@ -11,6 +11,8 @@ const STAGE_LABELS = {
 };
 
 const PROGRESS_STAGES = new Set(["mail_ready", "mailed", "replied", "meeting", "won"]);
+/** Days since last mailed_at before a new open posting can resurface in 추천 as 재발송. */
+const REAPPROACH_DAYS = 60;
 
 const SOURCE_LABELS = {
   albamon: "알바몬",
@@ -98,6 +100,70 @@ function poolOf(c) {
 function isProgress(c) {
   if (PROGRESS_STAGES.has(stageOf(c))) return true;
   return c.mail_status === "ready";
+}
+
+function mailedAtMs(c) {
+  const raw = c?.mailed_at || c?.mailedAt || "";
+  if (!raw) return 0;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function postCollectedMs(p) {
+  const raw = p?.collected_at || p?.collectedAt || p?.last_seen_at || p?.lastSeenAt || "";
+  if (!raw) return 0;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Open posts collected after the last mail send (new QA cycle). */
+function freshOpenPostsAfterMail(c) {
+  const mailedMs = mailedAtMs(c);
+  if (!mailedMs) return [];
+  const pinnedUrl = pickStr(c.latest_offer_url, c.latestOfferUrl);
+  return postsForCompany(c).filter((p) => {
+    if (isClosedPost(p)) return false;
+    const url = pickStr(p.url);
+    if (!url) return false;
+    const collected = postCollectedMs(p);
+    if (collected > mailedMs) return true;
+    // Client slim posts often lack collected_at — treat distinct open URL as new cycle.
+    if (!collected && pinnedUrl && url !== pinnedUrl) return true;
+    return false;
+  });
+}
+
+function reapproachPost(c) {
+  const list = freshOpenPostsAfterMail(c);
+  if (!list.length) return null;
+  return list.slice().sort((a, b) => postCollectedMs(b) - postCollectedMs(a))[0];
+}
+
+/**
+ * Already mailed, cooldown passed, and a newer open posting appeared.
+ * Still stays in 진행; also surfaces again under 추천 as 재발송.
+ */
+function isReapproachEligible(c) {
+  if (!c || isExcluded(c)) return false;
+  if (stageOf(c) !== "mailed") return false;
+  const mailedMs = mailedAtMs(c);
+  if (!mailedMs) return false;
+  const days = (Date.now() - mailedMs) / 86400000;
+  if (days < REAPPROACH_DAYS) return false;
+  return freshOpenPostsAfterMail(c).length > 0;
+}
+
+function stageLabelOf(c) {
+  if (isReapproachEligible(c)) return "재발송";
+  return STAGE_LABELS[stageOf(c)] || stageOf(c);
+}
+
+function displayMemoOf(c) {
+  const base = memoOf(c);
+  if (!isReapproachEligible(c)) return base;
+  const sent = mailedAtOf(c) || "—";
+  const note = `재공고 · 직전발송 ${sent} · 새공고 감지`;
+  return base ? `${base} · ${note}` : note;
 }
 
 function displayName(c) {
@@ -574,7 +640,10 @@ function latestPostForCompany(c) {
 function matchesTab(c) {
   if (isExcluded(c)) return state.tab === "excluded";
   if (state.tab === "excluded") return false;
-  if (state.tab === "recommended") return !!c.is_recommended && !isProgress(c);
+  if (state.tab === "recommended") {
+    if (isReapproachEligible(c)) return true;
+    return !!c.is_recommended && !isProgress(c);
+  }
   if (state.tab === "progress") return isProgress(c);
   if (state.tab === "new") return stageOf(c) === "new" && !c.is_recommended && !isProgress(c);
   if (state.tab === "all") return true;
@@ -1038,8 +1107,9 @@ function paintDetail() {
   $("#detailTitle").textContent = displayName(c);
   $("#detailHeaderChips").innerHTML = `
     <span class="badge ${grade === "A" ? "badge-a" : grade === "B" ? "badge-b" : "badge-c"}">${escapeHtml(grade)}</span>
-    <span class="badge badge-src">${escapeHtml(STAGE_LABELS[stage] || stage)}</span>
+    <span class="badge ${isReapproachEligible(c) ? "badge-reapproach" : "badge-src"}">${escapeHtml(stageLabelOf(c))}</span>
     ${c.is_recommended ? `<span class="badge badge-rec">추천</span>` : ""}
+    ${isReapproachEligible(c) ? `<span class="badge badge-reapproach">재발송</span>` : ""}
     ${excluded ? `<span class="badge badge-closed">제외</span>` : ""}
   `;
   $("#detailHeaderSub").textContent = [
@@ -1119,11 +1189,22 @@ function bindDetailEvents(c) {
     switchTab("progress");
   });
   $("#detailMailedBtn")?.addEventListener("click", async () => {
+    const latest = latestPostForCompany(c);
+    const mailedAt = new Date().toISOString();
     await patchCompany(c.company_id, {
       stage: "mailed",
       mailStatus: "sent",
-      mailedAt: new Date().toISOString(),
+      mailedAt,
       isHidden: false
+    });
+    syncCompanyEverywhere(c.company_id, (row) => {
+      row.mailed_at = mailedAt;
+      row.stage = "mailed";
+      row.mail_status = "sent";
+      if (latest?.url) {
+        row.latest_offer_url = latest.url;
+        row.latest_offer_title = latest.title || row.latest_offer_title || "";
+      }
     });
     switchTab("progress");
   });
@@ -1195,6 +1276,18 @@ function bindDetailEvents(c) {
       patch.isRecommended = false;
     }
     await patchCompany(c.company_id, patch);
+    if (next === "mailed") {
+      const latest = latestPostForCompany(c);
+      syncCompanyEverywhere(c.company_id, (row) => {
+        row.stage = "mailed";
+        row.mail_status = "sent";
+        row.mailed_at = patch.mailedAt;
+        if (latest?.url) {
+          row.latest_offer_url = latest.url;
+          row.latest_offer_title = latest.title || row.latest_offer_title || "";
+        }
+      });
+    }
     if (PROGRESS_STAGES.has(next)) switchTab("progress");
   });
 }
@@ -1468,8 +1561,8 @@ function updateCounts() {
     if (!companyHasVisiblePost(c)) continue;
     buckets.all += 1;
     if (isProgress(c)) buckets.progress += 1;
-    else if (c.is_recommended) buckets.recommended += 1;
-    else if (stageOf(c) === "new") buckets.new += 1;
+    if (isReapproachEligible(c) || (c.is_recommended && !isProgress(c))) buckets.recommended += 1;
+    if (!isProgress(c) && !c.is_recommended && stageOf(c) === "new") buckets.new += 1;
   }
   for (const [k, v] of Object.entries(buckets)) {
     const el = document.querySelector(`[data-count="${k}"]`);
@@ -1622,9 +1715,11 @@ function mailedAtOf(c) {
 }
 
 function sheetRowOf(c, index) {
-  const latest = latestPostForCompany(c);
-  const title = pickStr(c.latest_offer_title, latest?.title);
-  const url = pickStr(c.latest_offer_url, latest?.url, c._clientPosts?.[0]?.url);
+  const reapproach = isReapproachEligible(c);
+  const fresh = reapproach ? reapproachPost(c) : null;
+  const latest = fresh || latestPostForCompany(c);
+  const title = pickStr(fresh?.title, c.latest_offer_title, latest?.title);
+  const url = pickStr(fresh?.url, c.latest_offer_url, latest?.url, c._clientPosts?.[0]?.url);
   return {
     no: index,
     name: displayName(c),
@@ -1635,8 +1730,9 @@ function sheetRowOf(c, index) {
     post: title || "-",
     postUrl: url,
     mailedAt: mailedAtOf(c),
-    stage: STAGE_LABELS[stageOf(c)] || stageOf(c),
-    memo: memoOf(c),
+    stage: stageLabelOf(c),
+    stageReapproach: reapproach,
+    memo: displayMemoOf(c),
     mail: mailToDisplay(c),
     companyId: c.company_id,
     excluded: isExcluded(c)
@@ -1732,7 +1828,11 @@ function renderCompanies() {
         <td class="cell-clip col-contact">${escapeHtml(r.contact || "—")}</td>
         <td class="cell-clip col-post">${postCell}</td>
         <td class="col-sent">${escapeHtml(r.mailedAt || "—")}</td>
-        <td class="col-stage">${escapeHtml(r.stage)}</td>
+        <td class="col-stage${r.stageReapproach ? " stage-reapproach" : ""}">${
+          r.stageReapproach
+            ? `<span class="badge badge-reapproach">${escapeHtml(r.stage)}</span>`
+            : escapeHtml(r.stage)
+        }</td>
         <td class="cell-clip col-note" title="${escapeAttr(r.memo)}">${escapeHtml(r.memo || "—")}</td>
         <td class="cell-clip mail-cell col-mail-to">${mailCell}</td>
         <td class="col-actions">${actionButtons(c)}</td>
@@ -1951,11 +2051,23 @@ async function handleRowAction(act, id) {
     return;
   }
   if (act === "mailed") {
+    const latest = latestPostForCompany(c);
+    const mailedAt = new Date().toISOString();
     await patchCompany(id, {
       stage: "mailed",
       mailStatus: "sent",
-      mailedAt: new Date().toISOString(),
+      mailedAt,
       isHidden: false
+    });
+    // Pin the posting we just mailed about so the next new URL can trigger 재발송.
+    syncCompanyEverywhere(id, (row) => {
+      row.mailed_at = mailedAt;
+      row.stage = "mailed";
+      row.mail_status = "sent";
+      if (latest?.url) {
+        row.latest_offer_url = latest.url;
+        row.latest_offer_title = latest.title || row.latest_offer_title || "";
+      }
     });
     switchTab("progress");
     return;

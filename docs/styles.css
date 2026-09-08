@@ -736,6 +736,14 @@ body.detail-drawer-open { overflow: hidden; }
   min-width: 72px;
   text-align: center;
 }
+.badge-reapproach {
+  background: #e0f2fe;
+  color: #0369a1;
+  font-weight: 650;
+}
+.sheet-table .stage-reapproach {
+  white-space: nowrap;
+}
 .badge-alba { background: #fce7f3; color: #9d174d; margin-left: 4px; }
 
 @media (max-width: 800px) {
