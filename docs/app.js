@@ -325,11 +325,36 @@ function ensureMgmtCompaniesPresent() {
 
 function rebuildActiveCompanies() {
   if (state.empFilter === "alba") {
+    const clientById = new Map((state.allCompanies || []).map((c) => [c.company_id, c]));
     const byId = new Map();
-    for (const c of state.offerCompanies) {
-      if (isInAlbaPool(c)) byId.set(c.company_id, c);
+    for (const offer of state.offerCompanies || []) {
+      if (!isInAlbaPool(offer)) continue;
+      const base = clientById.get(offer.company_id);
+      if (base) {
+        // Prefer Client row (has posts/profile); overlay Offer CRM flags.
+        const merged = {
+          ...base,
+          is_recommended: offer.is_recommended ?? base.is_recommended,
+          is_hidden: offer.is_hidden ?? base.is_hidden,
+          is_alba: offer.is_alba ?? base.is_alba,
+          stage: offer.stage || base.stage,
+          status: offer.status || base.status,
+          mail_status: offer.mail_status || base.mail_status,
+          mailed_at: offer.mailed_at || base.mailed_at,
+          memo: offer.memo || base.memo,
+          recommend_score: offer.recommend_score ?? base.recommend_score,
+          closed_reason: offer.closed_reason || base.closed_reason,
+          latest_offer_title: pickStr(offer.latest_offer_title, base.latest_offer_title),
+          latest_offer_url: pickStr(offer.latest_offer_url, base.latest_offer_url),
+          offer_post_count: offer.offer_post_count || base.offer_post_count || 0,
+          contact_email: pickStr(base.contact_email, offer.contact_email)
+        };
+        byId.set(offer.company_id, applyOfferProfile(merged, offer));
+      } else {
+        byId.set(offer.company_id, applyOfferProfile({ ...offer }, offer));
+      }
     }
-    for (const c of state.allCompanies) {
+    for (const c of state.allCompanies || []) {
       if (isInAlbaPool(c) && !byId.has(c.company_id)) byId.set(c.company_id, c);
     }
     state.companies = [...byId.values()];
@@ -480,8 +505,8 @@ function mapClientRow(row, offerMap) {
     exclude_reason: row.excludeReason || offer.exclude_reason || "",
     remark: row.remark || "",
     _pool: "client",
-    _clientPosts: first.title
-      ? [{ title: first.title, url: first.url, source: first.source, status: first.status || "open" }]
+    _clientPosts: first.url || first.title
+      ? [{ title: first.title || "", url: first.url || "", source: first.source, status: first.status || "open" }]
       : []
   };
 }
@@ -1598,17 +1623,9 @@ function mailedAtOf(c) {
 
 function sheetRowOf(c, index) {
   const latest = latestPostForCompany(c);
-  const title = c.latest_offer_title || latest?.title || "";
-  const url = c.latest_offer_url || latest?.url || "";
-  const postLabel = title || (url ? url : "-");
-  return {
-    no: index,
-    name: displayName(c),
-    bizNo: bizNoOf(c),
-    homepage: homepageOf(c),
-    industry: industryOf(c),
-    contact: contactInfoText(c),
-    post: postLabel,
+  const title = pickStr(c.latest_offer_title, latest?.title);
+  const url = pickStr(c.latest_offer_url, latest?.url, c._clientPosts?.[0]?.url);
+    post: title || "-",
     postUrl: url,
     mailedAt: mailedAtOf(c),
     stage: STAGE_LABELS[stageOf(c)] || stageOf(c),
@@ -1687,7 +1704,9 @@ function renderCompanies() {
         ? `<a class="post-link" href="${escapeAttr(r.homepage)}" target="_blank" rel="noopener">${escapeHtml(r.homepage)}</a>`
         : "—";
       const postCell = r.postUrl
-        ? `<a class="post-link" href="${escapeAttr(r.postUrl)}" target="_blank" rel="noopener">${escapeHtml(r.post)}</a>`
+        ? `<a class="post-link" href="${escapeAttr(r.postUrl)}" target="_blank" rel="noopener" title="${escapeAttr(
+            r.postUrl
+          )}">${escapeHtml(r.post || "-")}</a>`
         : escapeHtml(r.post || "-");
       const mailCell = r.mail
         ? `<a class="post-link" href="mailto:${escapeAttr(
