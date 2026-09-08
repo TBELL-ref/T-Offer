@@ -1419,6 +1419,31 @@ function mergeEditsIntoCompanies() {
   }
 }
 
+async function copyMailAddress(c) {
+  const email = mailToDisplay(c) || `${c.contact_email || ""}`.trim();
+  if (!email) {
+    $("#status").textContent = "메일 주소가 없습니다";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(email);
+    $("#status").textContent = `메일 주소 복사됨 · ${email}`;
+  } catch (err) {
+    console.warn(err);
+    $("#status").textContent = `메일 주소 복사 실패: ${err.message || err}`;
+  }
+}
+
+async function copyMailSubject() {
+  try {
+    const subject = await TOfferSupabase.copyMailSubjectToClipboard();
+    $("#status").textContent = `제목 복사됨 · ${subject}`;
+  } catch (err) {
+    console.warn(err);
+    $("#status").textContent = `제목 복사 실패: ${err.message || err}`;
+  }
+}
+
 async function copyPromo(c) {
   const latest = latestPostForCompany(c);
   try {
@@ -1433,13 +1458,13 @@ async function copyPromo(c) {
     }
     const mode = await TOfferSupabase.copyPromoToClipboard(mail);
     if (mode === "html") {
-      $("#status").textContent = `복사됨 · 제목란에 Ctrl+V → 본문에 Ctrl+V · ${mail.subject}`;
+      $("#status").textContent = `메일 본문(HTML) 복사됨 · 본문에 Ctrl+V`;
     } else {
-      $("#status").textContent = "텍스트만 복사됨. Chrome에서 「메일 HTML」을 다시 눌러 주세요.";
+      $("#status").textContent = "텍스트만 복사됨. Chrome에서 「메일HTML」을 다시 눌러 주세요.";
     }
   } catch (err) {
     console.warn(err);
-    $("#status").textContent = `메일 복사 실패: ${err.message || err}`;
+    $("#status").textContent = `메일 본문 복사 실패: ${err.message || err}`;
   }
 }
 
@@ -1827,9 +1852,9 @@ function renderCompanies() {
           )}">${escapeHtml(r.post || "-")}</a>`
         : escapeHtml(r.post || "-");
       const mailCell = r.mail
-        ? `<button type="button" class="mail-copy-btn" data-act="promo" data-id="${escapeAttr(
+        ? `<button type="button" class="mail-copy-btn" data-act="copy_mail" data-id="${escapeAttr(
             c.company_id
-          )}" title="클릭: 제목+HTML 본문 복사 (발송 아님)">${escapeHtml(r.mail)}</button>`
+          )}" title="클릭: 메일 주소 복사">${escapeHtml(r.mail)}</button>`
         : `<span class="detail-muted">메일 부재</span>`;
       return `<tr class="${open ? "is-open" : ""} ${r.excluded ? "row-closed" : ""}" data-company-id="${escapeAttr(c.company_id)}">
         <td class="col-no">${r.no}</td>
@@ -2049,6 +2074,10 @@ async function handleRowAction(act, id) {
     await copyPromo(c);
     return;
   }
+  if (act === "copy_mail") {
+    await copyMailAddress(c);
+    return;
+  }
   if (act === "recommend") {
     await recommendCompany(c, !c.is_recommended);
     return;
@@ -2246,6 +2275,7 @@ function bind() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   $("#reload").addEventListener("click", () => load());
+  $("#copySubjectBtn")?.addEventListener("click", () => copyMailSubject());
   $("#exportCsvBtn")?.addEventListener("click", () => exportSheetCsv());
 
   $("#companyTable").addEventListener("click", async (e) => {

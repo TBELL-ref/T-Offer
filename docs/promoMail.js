@@ -189,26 +189,23 @@ async function copyHtmlViaClipboardItem(html, plain) {
 }
 
 /**
- * Copy styled HTML for paste into Outlook/Gmail compose.
+ * Copy styled HTML body for paste into Outlook/Gmail compose body.
  * - text/html → 메일 본문에 Ctrl+V (스타일 유지)
- * - text/plain → 제목만 (메일 제목란에 Ctrl+V)
+ * - text/plain → HTML 실패 시 본문 텍스트 폴백
  */
 export async function copyPromoToClipboard(mail) {
-  const subject = `${mail.subject || ""}`.trim();
   const html = mail.isHtml ? mail.body : "";
   const plainBody = mail.plain || (!mail.isHtml ? mail.body : "") || "";
-  // Subject field uses text/plain; body field prefers text/html.
-  const plainForClipboard = subject || plainBody;
 
   if (mail.isHtml && html) {
     try {
-      await copyHtmlViaClipboardItem(html, plainForClipboard);
+      await copyHtmlViaClipboardItem(html, plainBody);
       return "html";
     } catch (err) {
       console.warn("ClipboardItem html copy failed, trying execCommand", err);
     }
     try {
-      await copyHtmlViaExecCommand(html, plainForClipboard);
+      await copyHtmlViaExecCommand(html, plainBody);
       return "html";
     } catch (err) {
       console.warn("execCommand html copy failed", err);
@@ -216,10 +213,20 @@ export async function copyPromoToClipboard(mail) {
   }
 
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(subject ? `${subject}\n\n${plainBody}` : plainBody);
+    await navigator.clipboard.writeText(plainBody);
     return "text";
   }
   throw new Error("clipboard unavailable");
+}
+
+/** Copy mail subject only (toolbar 「제목복사」). */
+export async function copyMailSubjectToClipboard(template) {
+  const tpl = template || (await ensureMailTemplate());
+  const subject = `${tpl.subject || DEFAULT_MAIL_TEMPLATE.subject}`.replace(/\n+/g, " ").trim();
+  if (!subject) throw new Error("제목이 비어 있습니다");
+  if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+  await navigator.clipboard.writeText(subject);
+  return subject;
 }
 
 export function mailtoHref({ subject, body, to = "" }) {
