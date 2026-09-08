@@ -150,27 +150,63 @@ body {
 }
 .sheet-table {
   font-size: 0.82rem;
-  min-width: 1200px;
+  min-width: 1680px;
+  table-layout: fixed;
 }
 .sheet-table th.col-no,
 .sheet-table td.col-no {
-  width: 36px;
+  width: 40px;
   text-align: center;
   color: var(--muted);
 }
+.sheet-table .col-co,
+.sheet-table td.co-name {
+  width: 180px;
+  min-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-table .col-biz {
+  width: 128px;
+  white-space: nowrap;
+}
+.sheet-table .col-home {
+  width: 200px;
+}
+.sheet-table .col-ind {
+  width: 180px;
+}
+.sheet-table .col-contact {
+  width: 180px;
+}
+.sheet-table .col-post {
+  width: 160px;
+}
+.sheet-table .col-sent {
+  width: 92px;
+  white-space: nowrap;
+}
+.sheet-table .col-stage {
+  width: 110px;
+  min-width: 100px;
+  white-space: nowrap;
+}
+.sheet-table .col-note {
+  width: 160px;
+}
+.sheet-table .col-mail-to,
+.sheet-table .mail-cell {
+  width: 240px;
+  max-width: none;
+}
 .sheet-table .cell-clip {
-  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sheet-table .mail-cell {
-  max-width: 220px;
-}
-.sheet-table .col-note {
-  max-width: 140px;
-}
 .sheet-table .col-actions {
+  width: 220px;
   white-space: nowrap;
 }
 .search-box { flex: 1; }
@@ -223,7 +259,7 @@ body {
 
 .col-grade { width: 52px; }
 .col-src { width: 88px; }
-.col-stage { width: 88px; }
+.col-stage { width: 110px; }
 .col-post-status { width: 72px; }
 .col-mail { width: 72px; }
 .col-score { width: 56px; text-align: right !important; }

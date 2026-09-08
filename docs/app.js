@@ -172,10 +172,25 @@ function buildContactPatch(contacts) {
   return { ...primary, contacts: list };
 }
 
+function pickStr(...vals) {
+  for (const v of vals) {
+    const s = `${v ?? ""}`.trim();
+    if (s) return s;
+  }
+  return "";
+}
+
 function profileOf(c) {
   const edit = state.edits[c.company_id]?.profile || {};
   const base = c.profile || {};
-  return { ...base, ...edit };
+  // Empty edit fields must not wipe Client snapshot values (homepage/serviceUrl etc.).
+  const out = { ...base };
+  for (const [k, v] of Object.entries(edit)) {
+    if (v == null) continue;
+    if (typeof v === "string" && !v.trim()) continue;
+    out[k] = v;
+  }
+  return out;
 }
 
 function postStatusOf(p) {
@@ -387,14 +402,23 @@ function mapClientRow(row, offerMap) {
   const mgmt = state.offerMgmt[id] || {};
   const posts = Array.isArray(row.posts) ? row.posts : [];
   const first = posts[0] || {};
+  const profile = row.profile || {};
+  const homepage = pickStr(
+    profile.homepage,
+    profile.serviceUrl,
+    offer.homepage,
+    row.domain ? `https://${row.domain}` : ""
+  );
   // Keep only a slim first-post hint — full Client post arrays cause UI jank.
   return {
     company_id: id,
     company_name: row.companyNameKo || row.companyName || offer.company_name || id,
     domain: row.domain || offer.domain || "",
-    homepage: row.profile?.homepage || offer.homepage || "",
+    homepage,
+    biz_no: pickStr(profile.bizNo, profile.biz_no, offer.biz_no),
+    biz_item: pickStr(profile.bizItem, profile.biz_item, profile.industrySummary),
     company_tier: row.companyTier || offer.company_tier || "",
-    profile: row.profile || {},
+    profile,
     contact: row.contact || {},
     contact_name: row.contact?.name || offer.contact_name || "",
     contact_phone: row.contact?.phone || offer.contact_phone || "",
@@ -1216,8 +1240,17 @@ function mergeEditsIntoCompanies() {
       if (edit.companyTier) company.company_tier = edit.companyTier;
       if (edit.excludeReason != null) company.exclude_reason = edit.excludeReason;
       if (edit.profile) {
-        company.profile = { ...(company.profile || {}), ...edit.profile };
-        if (edit.profile.homepage) company.homepage = edit.profile.homepage;
+        const prev = company.profile || {};
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(edit.profile)) {
+          if (v == null) continue;
+          if (typeof v === "string" && !`${v}`.trim()) continue;
+          next[k] = v;
+        }
+        company.profile = next;
+        company.homepage = pickStr(next.homepage, next.serviceUrl, company.homepage);
+        company.biz_no = pickStr(next.bizNo, next.biz_no, company.biz_no);
+        company.biz_item = pickStr(next.bizItem, next.biz_item, company.biz_item);
       }
       if (edit.contact) {
         company.contact = edit.contact;
@@ -1225,6 +1258,7 @@ function mergeEditsIntoCompanies() {
         company.contact_email = edit.contact.email || company.contact_email || "";
         company.contact_phone = edit.contact.phone || company.contact_phone || "";
       }
+      if (edit.notes && !company.memo) company.memo = edit.notes;
     }
   }
 }
@@ -1441,29 +1475,51 @@ function switchTab(tab) {
   renderList();
 }
 
+function shortIndustry(raw) {
+  const s = pickStr(raw);
+  if (!s) return "";
+  if (!/대분류\s*:/.test(s)) return s;
+  const fine = s.match(/세세분류\s*:\s*([^·]+)/);
+  if (fine?.[1]) return fine[1].trim();
+  const mid = s.match(/세분류\s*:\s*([^·]+)/);
+  if (mid?.[1]) return mid[1].trim();
+  const item = s.match(/소분류\s*:\s*([^·]+)/);
+  if (item?.[1]) return item[1].trim();
+  return s.split("·")[0].replace(/^대분류\s*:\s*/, "").trim() || s;
+}
+
 function industryOf(c) {
   const p = profileOf(c);
-  return (
-    p.industrySummary ||
-    p.bizItem ||
-    p.biz_item ||
-    p.bizType ||
-    p.biz_type ||
-    c.biz_item ||
-    c.biz_type ||
-    ""
+  return shortIndustry(
+    pickStr(
+      p.bizItem,
+      p.biz_item,
+      c.biz_item,
+      p.industrySummary,
+      p.bizType,
+      p.biz_type,
+      c.biz_type
+    )
   );
 }
 
 function bizNoOf(c) {
   const p = profileOf(c);
-  return p.bizNo || p.biz_no || c.biz_no || "";
+  return pickStr(p.bizNo, p.biz_no, c.biz_no);
 }
 
 function homepageOf(c) {
   const p = profileOf(c);
   const edit = state.edits[c.company_id] || {};
-  return p.homepage || c.homepage || edit.profile?.homepage || "";
+  const domain = pickStr(p.domain, edit.domain, c.domain);
+  return pickStr(
+    p.homepage,
+    p.serviceUrl,
+    c.homepage,
+    edit.profile?.homepage,
+    edit.profile?.serviceUrl,
+    domain ? (/^https?:\/\//i.test(domain) ? domain : `https://${domain}`) : ""
+  );
 }
 
 function contactInfoText(c) {
@@ -1605,16 +1661,16 @@ function renderCompanies() {
         : `<span class="detail-muted">메일 부재</span>`;
       return `<tr class="${open ? "is-open" : ""} ${r.excluded ? "row-closed" : ""}" data-company-id="${escapeAttr(c.company_id)}">
         <td class="col-no">${r.no}</td>
-        <td class="co-name" data-open-detail="${escapeAttr(c.company_id)}">${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.bizNo || "—")}</td>
-        <td class="cell-clip">${homeCell}</td>
-        <td class="cell-clip">${escapeHtml(r.industry || "—")}</td>
-        <td class="cell-clip">${escapeHtml(r.contact || "—")}</td>
-        <td class="cell-clip">${postCell}</td>
-        <td>${escapeHtml(r.mailedAt || "—")}</td>
-        <td>${escapeHtml(r.stage)}</td>
-        <td class="cell-clip" title="${escapeAttr(r.memo)}">${escapeHtml(r.memo || "—")}</td>
-        <td class="cell-clip mail-cell">${mailCell}</td>
+        <td class="co-name col-co" data-open-detail="${escapeAttr(c.company_id)}" title="${escapeAttr(r.name)}">${escapeHtml(r.name)}</td>
+        <td class="col-biz">${escapeHtml(r.bizNo || "—")}</td>
+        <td class="cell-clip col-home">${homeCell}</td>
+        <td class="cell-clip col-ind" title="${escapeAttr(r.industry)}">${escapeHtml(r.industry || "—")}</td>
+        <td class="cell-clip col-contact">${escapeHtml(r.contact || "—")}</td>
+        <td class="cell-clip col-post">${postCell}</td>
+        <td class="col-sent">${escapeHtml(r.mailedAt || "—")}</td>
+        <td class="col-stage">${escapeHtml(r.stage)}</td>
+        <td class="cell-clip col-note" title="${escapeAttr(r.memo)}">${escapeHtml(r.memo || "—")}</td>
+        <td class="cell-clip mail-cell col-mail-to">${mailCell}</td>
         <td class="col-actions">${actionButtons(c)}</td>
       </tr>`;
     })
