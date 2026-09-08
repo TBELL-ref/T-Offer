@@ -327,6 +327,7 @@ function rebuildActiveCompanies() {
 function filteredCompanyRows() {
   const rows = state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
   const order = {
+    // 진행
     cmp_2c277ff9db: 1,
     offer_굿터치_a5a6ecab: 2,
     cmp_m_6fc09f95: 3,
@@ -336,9 +337,19 @@ function filteredCompanyRows() {
     cmp_c0ab80433e: 7,
     cmp_d13c7acd8e: 8,
     cmp_fda1f5bc63: 9,
-    cmp_72626b228a: 10,
+    // 추천
     cmp_e5ec117cf2: 1,
-    cmp_20c3d6c2b2: 2
+    cmp_72626b228a: 2,
+    cmp_m_21b98353: 3,
+    cmp_n_52e95328: 4,
+    cmp_6d0974d76c: 5,
+    cmp_m_800b227c: 6,
+    cmp_621c56f98a: 7,
+    cmp_bcd87ebc7a: 8,
+    cmp_m_026b97c9: 9,
+    cmp_ad7a591926: 10,
+    // 제외
+    cmp_20c3d6c2b2: 1
   };
   return rows.slice().sort((a, b) => {
     const ao = order[a.company_id] ?? 9999;
