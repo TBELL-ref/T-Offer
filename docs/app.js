@@ -1144,7 +1144,7 @@ function paintDetail() {
     <section class="detail-block">
       <h3 class="detail-block-title">빠른 액션</h3>
       <div class="detail-actions-row">
-        <button type="button" class="btn-ghost" id="detailPromoBtn">메일문구 복사</button>
+        <button type="button" class="btn-ghost" id="detailPromoBtn">메일 HTML 복사</button>
         <button type="button" class="btn-ghost" id="detailMailReadyBtn" ${dis}>메일대기로</button>
         <button type="button" class="btn-ghost" id="detailMailedBtn" ${dis}>발송완료</button>
       </div>
@@ -1422,30 +1422,25 @@ function mergeEditsIntoCompanies() {
 async function copyPromo(c) {
   const latest = latestPostForCompany(c);
   try {
+    // Template should already be prefetched; ensure before copy so HTML is ready.
+    await TOfferSupabase.prefetchMailTemplate();
     const mail = await TOfferSupabase.buildPromoMailAsync({
       companyName: displayName(c),
       postTitle: c.latest_offer_title || latest?.title,
       postUrl: c.latest_offer_url || latest?.url
     });
+    if (!mail.body || !mail.isHtml) {
+      throw new Error("HTML 메일 본문이 비어 있습니다. 관리에서 「기본 HTML로 되돌리기」를 눌러 주세요.");
+    }
     const mode = await TOfferSupabase.copyPromoToClipboard(mail);
-    $("#status").textContent =
-      mode === "html"
-        ? "HTML 메일 본문 복사됨 — Outlook/Gmail에 붙여넣기"
-        : "메일 문구 복사됨 (공용 본문 사용)";
+    if (mode === "html") {
+      $("#status").textContent = `HTML 스타일 복사됨 · 제목: ${mail.subject} — 메일 본문에 Ctrl+V`;
+    } else {
+      $("#status").textContent = "텍스트만 복사됨 (HTML 클립보드 실패). Chrome에서 다시 시도해 주세요.";
+    }
   } catch (err) {
     console.warn(err);
-    try {
-      const mail = TOfferSupabase.buildPromoMail({
-        companyName: displayName(c),
-        postTitle: c.latest_offer_title || latest?.title,
-        postUrl: c.latest_offer_url || latest?.url
-      });
-      const href = TOfferSupabase.mailtoHref(mail);
-      window.open(href, "_blank");
-      $("#status").textContent = "메일 앱으로 열림 (본문은 템플릿에서 복사해 주세요)";
-    } catch (err2) {
-      $("#status").textContent = `메일 복사 실패: ${err2.message || err2}`;
-    }
+    $("#status").textContent = `메일 HTML 복사 실패: ${err.message || err}`;
   }
 }
 
@@ -1561,7 +1556,7 @@ function actionButtons(c) {
       stage === "mail_ready" ? "disabled" : ""
     }>메일대기</button>
     <button type="button" class="btn-act" data-act="mailed" data-id="${id}" ${disabled}>발송완료</button>
-    <button type="button" class="btn-act" data-act="promo" data-id="${id}">메일문구</button>
+    <button type="button" class="btn-act" data-act="promo" data-id="${id}">메일HTML</button>
     <button type="button" class="btn-act danger" data-act="exclude" data-id="${id}" ${disabled}>제외</button>
   </div>`;
 }
@@ -1953,6 +1948,7 @@ async function loadClientUniverse() {
 async function load() {
   $("#status").textContent = "불러오는 중…";
   loadAlbaTagState();
+  void TOfferSupabase.prefetchMailTemplate();
   try {
     // 1) Client snapshot first — fast first paint for 전체
     const clientData = await loadClientUniverse();
@@ -2191,7 +2187,7 @@ function bindAuth() {
       body: $("#mailTplBody")?.value,
       isHtml: true
     });
-    setAdminStatus("메일 본문을 저장했습니다. 「메일문구」복사에 바로 반영됩니다.");
+    setAdminStatus("메일 본문을 저장했습니다. 「메일 HTML」복사에 바로 반영됩니다.");
     $("#status").textContent = "메일 본문 저장됨";
   });
   $("#mailTplResetBtn")?.addEventListener("click", async () => {

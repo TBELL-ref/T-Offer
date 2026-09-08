@@ -31,6 +31,14 @@ export async function loadDefaultHtmlBody() {
   return htmlLoadPromise;
 }
 
+/** Warm the HTML template cache so 「메일문구」can copy without losing the user gesture. */
+export function prefetchMailTemplate() {
+  return loadDefaultHtmlBody().catch((err) => {
+    console.warn("mail template prefetch failed", err);
+    return "";
+  });
+}
+
 export function loadMailTemplate() {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -48,9 +56,10 @@ export function loadMailTemplate() {
 
 export async function ensureMailTemplate() {
   const tpl = loadMailTemplate();
-  if (tpl.body && tpl.body.trim()) return tpl;
+  const looksHtml = /<table[\s>]/i.test(tpl.body || "") || /<!DOCTYPE html>/i.test(tpl.body || "");
+  if (tpl.body && tpl.body.trim() && looksHtml) return { ...tpl, isHtml: true };
   const html = await loadDefaultHtmlBody();
-  return { ...tpl, subject: tpl.subject || DEFAULT_MAIL_TEMPLATE.subject, body: html, isHtml: true };
+  return { ...DEFAULT_MAIL_TEMPLATE, subject: tpl.subject || DEFAULT_MAIL_TEMPLATE.subject, body: html, isHtml: true };
 }
 
 export function saveMailTemplate({ subject, body, isHtml = true }) {
@@ -79,14 +88,31 @@ function fill(template, vars) {
 }
 
 function htmlToPlainText(html) {
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
-  const text = `${tmp.textContent || tmp.innerText || ""}`
-    .replace(/\u00a0/g, " ")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return text;
+  try {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return `${tmp.textContent || tmp.innerText || ""}`
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } catch {
+    return `${html || ""}`.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+}
+
+/** Body fragment pastes more reliably into Outlook/Gmail than a full HTML document. */
+export function htmlClipboardFragment(fullHtml) {
+  try {
+    const doc = new DOMParser().parseFromString(fullHtml, "text/html");
+    const bodyHtml = doc.body?.innerHTML?.trim();
+    if (bodyHtml) {
+      return `<div style="margin:0;padding:0;background:#e8edf4;font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',Arial,sans-serif;color:#222222;">${bodyHtml}</div>`;
+    }
+  } catch {
+    /* keep full */
+  }
+  return fullHtml;
 }
 
 export function buildPromoMail({ companyName, postTitle, postUrl } = {}, template = loadMailTemplate()) {
@@ -103,8 +129,9 @@ export function buildPromoMail({ companyName, postTitle, postUrl } = {}, templat
   const subject = fill(template.subject || DEFAULT_MAIL_TEMPLATE.subject, vars)
     .replace(/\n+/g, " ")
     .trim();
-  const body = fill(template.body || cachedHtmlBody || DEFAULT_MAIL_TEMPLATE.body, vars);
-  const isHtml = template.isHtml !== false && /<[a-z][\s\S]*>/i.test(body);
+  const rawBody = fill(template.body || cachedHtmlBody || DEFAULT_MAIL_TEMPLATE.body, vars);
+  const isHtml = template.isHtml !== false && /<[a-z][\s\S]*>/i.test(rawBody);
+  const body = isHtml ? htmlClipboardFragment(rawBody) : rawBody;
   const plain = isHtml ? htmlToPlainText(body) : body.replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
   return { subject, body, plain, isHtml };
 }
@@ -114,34 +141,88 @@ export async function buildPromoMailAsync(opts = {}) {
   return buildPromoMail(opts, template);
 }
 
+function copyHtmlViaExecCommand(html, plain) {
+  return new Promise((resolve, reject) => {
+    const onCopy = (e) => {
+      try {
+        e.clipboardData.setData("text/html", html);
+        e.clipboardData.setData("text/plain", plain);
+        e.preventDefault();
+        resolve("html");
+      } catch (err) {
+        reject(err);
+      }
+    };
+    document.addEventListener("copy", onCopy, { once: true });
+    const ok = document.execCommand("copy");
+    if (!ok) {
+      document.removeEventListener("copy", onCopy);
+      reject(new Error("execCommand copy failed"));
+    }
+  });
+}
+
+async function copyHtmlViaClipboardItem(html, plain) {
+  if (!navigator.clipboard?.write || !window.ClipboardItem) {
+    throw new Error("ClipboardItem unsupported");
+  }
+  // Safari wants Promise<Blob> values; Chromium accepts Blob.
+  const htmlBlob = new Blob([html], { type: "text/html" });
+  const plainBlob = new Blob([plain], { type: "text/plain" });
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": htmlBlob,
+        "text/plain": plainBlob
+      })
+    ]);
+    return "html";
+  } catch {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": Promise.resolve(htmlBlob),
+        "text/plain": Promise.resolve(plainBlob)
+      })
+    ]);
+    return "html";
+  }
+}
+
+/**
+ * Copy styled HTML for paste into Outlook/Gmail compose.
+ * Prefer ClipboardItem; fall back to execCommand copy-event injection (most reliable for rich paste).
+ */
 export async function copyPromoToClipboard(mail) {
   const subject = mail.subject || "";
   const html = mail.isHtml ? mail.body : "";
-  const plain = mail.plain || mail.body || "";
-  const bundle = mail.isHtml
-    ? `${subject}\n\n${plain}`
-    : `${subject}\n\n${plain}`;
+  const plain = mail.plain || (!mail.isHtml ? mail.body : "") || "";
+  const plainBundle = subject ? `${subject}\n\n${plain}` : plain;
 
-  if (mail.isHtml && html && navigator.clipboard?.write && window.ClipboardItem) {
+  if (mail.isHtml && html) {
     try {
-      const item = new ClipboardItem({
-        "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([bundle], { type: "text/plain" })
-      });
-      await navigator.clipboard.write([item]);
+      await copyHtmlViaClipboardItem(html, plainBundle);
       return "html";
-    } catch {
-      /* fall through */
+    } catch (err) {
+      console.warn("ClipboardItem html copy failed, trying execCommand", err);
+    }
+    try {
+      await copyHtmlViaExecCommand(html, plainBundle);
+      return "html";
+    } catch (err) {
+      console.warn("execCommand html copy failed", err);
     }
   }
-  await navigator.clipboard.writeText(bundle);
-  return "text";
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(plainBundle);
+    return "text";
+  }
+  throw new Error("clipboard unavailable");
 }
 
 export function mailtoHref({ subject, body, to = "" }) {
   const q = new URLSearchParams();
   if (subject) q.set("subject", subject);
-  // HTML bodies are too large for mailto — subject only
   const plain = `${body || ""}`;
   if (plain && plain.length < 1200 && !/<[a-z][\s\S]*>/i.test(plain)) q.set("body", plain);
   const qs = q.toString();
