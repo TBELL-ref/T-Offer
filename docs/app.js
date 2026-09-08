@@ -1625,6 +1625,13 @@ function sheetRowOf(c, index) {
   const latest = latestPostForCompany(c);
   const title = pickStr(c.latest_offer_title, latest?.title);
   const url = pickStr(c.latest_offer_url, latest?.url, c._clientPosts?.[0]?.url);
+  return {
+    no: index,
+    name: displayName(c),
+    bizNo: bizNoOf(c),
+    homepage: homepageOf(c),
+    industry: industryOf(c),
+    contact: contactInfoText(c),
     post: title || "-",
     postUrl: url,
     mailedAt: mailedAtOf(c),
