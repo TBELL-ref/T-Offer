@@ -190,23 +190,25 @@ async function copyHtmlViaClipboardItem(html, plain) {
 
 /**
  * Copy styled HTML for paste into Outlook/Gmail compose.
- * Prefer ClipboardItem; fall back to execCommand copy-event injection (most reliable for rich paste).
+ * - text/html → 메일 본문에 Ctrl+V (스타일 유지)
+ * - text/plain → 제목만 (메일 제목란에 Ctrl+V)
  */
 export async function copyPromoToClipboard(mail) {
-  const subject = mail.subject || "";
+  const subject = `${mail.subject || ""}`.trim();
   const html = mail.isHtml ? mail.body : "";
-  const plain = mail.plain || (!mail.isHtml ? mail.body : "") || "";
-  const plainBundle = subject ? `${subject}\n\n${plain}` : plain;
+  const plainBody = mail.plain || (!mail.isHtml ? mail.body : "") || "";
+  // Subject field uses text/plain; body field prefers text/html.
+  const plainForClipboard = subject || plainBody;
 
   if (mail.isHtml && html) {
     try {
-      await copyHtmlViaClipboardItem(html, plainBundle);
+      await copyHtmlViaClipboardItem(html, plainForClipboard);
       return "html";
     } catch (err) {
       console.warn("ClipboardItem html copy failed, trying execCommand", err);
     }
     try {
-      await copyHtmlViaExecCommand(html, plainBundle);
+      await copyHtmlViaExecCommand(html, plainForClipboard);
       return "html";
     } catch (err) {
       console.warn("execCommand html copy failed", err);
@@ -214,7 +216,7 @@ export async function copyPromoToClipboard(mail) {
   }
 
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(plainBundle);
+    await navigator.clipboard.writeText(subject ? `${subject}\n\n${plainBody}` : plainBody);
     return "text";
   }
   throw new Error("clipboard unavailable");

@@ -1422,7 +1422,6 @@ function mergeEditsIntoCompanies() {
 async function copyPromo(c) {
   const latest = latestPostForCompany(c);
   try {
-    // Template should already be prefetched; ensure before copy so HTML is ready.
     await TOfferSupabase.prefetchMailTemplate();
     const mail = await TOfferSupabase.buildPromoMailAsync({
       companyName: displayName(c),
@@ -1434,13 +1433,13 @@ async function copyPromo(c) {
     }
     const mode = await TOfferSupabase.copyPromoToClipboard(mail);
     if (mode === "html") {
-      $("#status").textContent = `HTML 스타일 복사됨 · 제목: ${mail.subject} — 메일 본문에 Ctrl+V`;
+      $("#status").textContent = `복사됨 · 제목란에 Ctrl+V → 본문에 Ctrl+V · ${mail.subject}`;
     } else {
-      $("#status").textContent = "텍스트만 복사됨 (HTML 클립보드 실패). Chrome에서 다시 시도해 주세요.";
+      $("#status").textContent = "텍스트만 복사됨. Chrome에서 「메일 HTML」을 다시 눌러 주세요.";
     }
   } catch (err) {
     console.warn(err);
-    $("#status").textContent = `메일 HTML 복사 실패: ${err.message || err}`;
+    $("#status").textContent = `메일 복사 실패: ${err.message || err}`;
   }
 }
 
@@ -1828,12 +1827,9 @@ function renderCompanies() {
           )}">${escapeHtml(r.post || "-")}</a>`
         : escapeHtml(r.post || "-");
       const mailCell = r.mail
-        ? `<a class="post-link" href="mailto:${escapeAttr(
-            contactsOf(c)
-              .map((x) => x.email)
-              .filter(Boolean)
-              .join(",")
-          )}">${escapeHtml(r.mail)}</a>`
+        ? `<button type="button" class="mail-copy-btn" data-act="promo" data-id="${escapeAttr(
+            c.company_id
+          )}" title="클릭: 제목+HTML 본문 복사 (발송 아님)">${escapeHtml(r.mail)}</button>`
         : `<span class="detail-muted">메일 부재</span>`;
       return `<tr class="${open ? "is-open" : ""} ${r.excluded ? "row-closed" : ""}" data-company-id="${escapeAttr(c.company_id)}">
         <td class="col-no">${r.no}</td>

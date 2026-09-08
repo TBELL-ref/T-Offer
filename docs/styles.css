@@ -200,6 +200,27 @@ body {
   width: 240px;
   max-width: none;
 }
+.mail-copy-btn {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-copy-btn:hover {
+  color: var(--accent-hover);
+}
 .sheet-table .cell-clip {
   overflow: hidden;
   text-overflow: ellipsis;
