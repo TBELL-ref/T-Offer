@@ -35,6 +35,8 @@ const state = {
   tab: "new",
   empFilter: "alba",
   postFilter: "open",
+  /** progress tab only: queue | sent | all */
+  progressFilter: "queue",
   page: 1,
   /** Active list for current emp tab */
   companies: [],
@@ -100,6 +102,33 @@ function poolOf(c) {
 function isProgress(c) {
   if (PROGRESS_STAGES.has(stageOf(c))) return true;
   return c.mail_status === "ready";
+}
+
+/** Already mailed (or later CRM stages). Sorted below 메일대기 in 진행. */
+function isProgressSent(c) {
+  const st = stageOf(c);
+  return st === "mailed" || st === "replied" || st === "meeting" || st === "won";
+}
+
+function isProgressQueue(c) {
+  return isProgress(c) && !isProgressSent(c);
+}
+
+function matchesProgressFilter(c) {
+  if (state.tab !== "progress") return true;
+  if (state.progressFilter === "queue") return isProgressQueue(c);
+  if (state.progressFilter === "sent") return isProgressSent(c);
+  return true;
+}
+
+/** Lower = higher in 진행 list. 메일대기 first, 발송완료 last. */
+function progressSortRank(c) {
+  const st = stageOf(c);
+  if (st === "mail_ready" || c.mail_status === "ready") return 0;
+  if (st === "replied" || st === "meeting") return 1;
+  if (st === "mailed") return 8;
+  if (st === "won") return 9;
+  return 5;
 }
 
 function mailedAtMs(c) {
@@ -431,7 +460,11 @@ function rebuildActiveCompanies() {
 }
 
 function filteredCompanyRows() {
-  const rows = state.companies.filter(matchesTab).filter(matchesQueryCompany).filter(companyHasVisiblePost);
+  const rows = state.companies
+    .filter(matchesTab)
+    .filter(matchesProgressFilter)
+    .filter(matchesQueryCompany)
+    .filter(companyHasVisiblePost);
   const order = {
     // 진행
     cmp_2c277ff9db: 1,
@@ -458,6 +491,15 @@ function filteredCompanyRows() {
     cmp_20c3d6c2b2: 1
   };
   return rows.slice().sort((a, b) => {
+    if (state.tab === "progress") {
+      const ar = progressSortRank(a);
+      const br = progressSortRank(b);
+      if (ar !== br) return ar - br;
+      // Within same rank: newer mailed first among sent; curated order for queue
+      if (ar >= 8) {
+        return mailedAtMs(b) - mailedAtMs(a);
+      }
+    }
     const ao = order[a.company_id] ?? 9999;
     const bo = order[b.company_id] ?? 9999;
     if (ao !== bo) return ao - bo;
@@ -1609,6 +1651,18 @@ function updateCounts() {
     if (el) el.textContent = String(v);
   }
 
+  const progressBuckets = { queue: 0, sent: 0, all: 0 };
+  for (const c of state.companies) {
+    if (isExcluded(c) || !isProgress(c) || !companyHasVisiblePost(c)) continue;
+    progressBuckets.all += 1;
+    if (isProgressSent(c)) progressBuckets.sent += 1;
+    else progressBuckets.queue += 1;
+  }
+  for (const [k, v] of Object.entries(progressBuckets)) {
+    const el = document.querySelector(`[data-progress-count="${k}"]`);
+    if (el) el.textContent = String(v);
+  }
+
   const viewPosts = listViewPosts();
   const postBuckets = {
     all: viewPosts.filter((p) => state.postFilter === "all" || true).length,
@@ -1659,7 +1713,17 @@ function setView(view) {
   $("#postsTable").classList.toggle("hidden", view !== "posts");
   $("#stageTabs").classList.toggle("hidden", view !== "companies");
   $("#postTabs").classList.toggle("hidden", view !== "posts");
+  syncProgressFilterTabs();
   renderList();
+}
+
+function syncProgressFilterTabs() {
+  const show = state.view === "companies" && state.tab === "progress";
+  $("#progressFilterTabs")?.classList.toggle("hidden", !show);
+  if (!show) return;
+  document.querySelectorAll("[data-progress-filter]").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-progress-filter") === state.progressFilter);
+  });
 }
 
 function switchTab(tab) {
@@ -1668,6 +1732,7 @@ function switchTab(tab) {
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.classList.toggle("active", b.getAttribute("data-tab") === tab);
   });
+  syncProgressFilterTabs();
   renderList();
 }
 
@@ -1832,7 +1897,11 @@ function renderCompanies() {
       state.tab === "recommended"
         ? "비어 있습니다. 알바 탭에서 「추천」으로 보내세요."
         : state.tab === "progress"
-          ? "비어 있습니다. 「메일대기」또는 「발송완료」로 진행에 넣으세요."
+          ? state.progressFilter === "sent"
+            ? "발송완료 건이 없습니다."
+            : state.progressFilter === "queue"
+              ? "메일대기 건이 없습니다. 「발송완료」또는 「전체」로 전환해 보세요."
+              : "비어 있습니다. 「메일대기」또는 「발송완료」로 진행에 넣으세요."
           : state.empFilter === "alba"
             ? "알바 태그가 없습니다. 전체 탭에서 「알바태그」로 추가하세요."
             : "표시할 회사가 없습니다.";
@@ -2238,6 +2307,15 @@ function bind() {
   });
   document.querySelectorAll("[data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.getAttribute("data-tab")));
+  });
+  document.querySelectorAll("[data-progress-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-progress-filter]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.progressFilter = btn.getAttribute("data-progress-filter");
+      state.page = 1;
+      renderList();
+    });
   });
   document.querySelectorAll("[data-post-filter]").forEach((btn) => {
     btn.addEventListener("click", () => {

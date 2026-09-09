@@ -28,6 +28,11 @@
           <button type="button" data-tab="all">전체 <span data-count="all">0</span></button>
           <button type="button" data-tab="excluded">제외 <span data-count="excluded">0</span></button>
         </nav>
+        <nav class="tabs hidden" id="progressFilterTabs" aria-label="진행 상태">
+          <button type="button" data-progress-filter="queue" class="active" title="메일대기·회신·미팅 등 미완료">대기 <span data-progress-count="queue">0</span></button>
+          <button type="button" data-progress-filter="sent" title="발송완료 이후">발송완료 <span data-progress-count="sent">0</span></button>
+          <button type="button" data-progress-filter="all" title="진행 전체 (발송은 하단)">전체 <span data-progress-count="all">0</span></button>
+        </nav>
         <nav class="tabs hidden" id="postTabs" aria-label="공고상태">
           <button type="button" data-post-filter="open" class="active">모집중 <span data-post-count="open">0</span></button>
           <button type="button" data-post-filter="closed">마감 <span data-post-count="closed">0</span></button>
