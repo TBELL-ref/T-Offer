@@ -1851,8 +1851,12 @@ function csvEscape(value) {
 }
 
 function exportSheetCsv() {
-  const active = filteredCompanyRows().filter((c) => !isExcluded(c));
-  const excluded = (state.companies || []).filter((c) => isExcluded(c));
+  // Screen order reversed for Excel (발송완료↑ / 대기↓ when on 진행 전체, etc.)
+  const active = filteredCompanyRows()
+    .filter((c) => !isExcluded(c))
+    .slice()
+    .reverse();
+  const excluded = (state.companies || []).filter((c) => isExcluded(c)).slice().reverse();
   const headers = ["#", "업체명", "사업자 번호", "홈페이지", "업종", "담당자 정보", "공고", "발송일", "상태", "비고", "메일"];
   const lines = [headers.map(csvEscape).join(",")];
   active.forEach((c, i) => {
