@@ -183,7 +183,9 @@ body {
 .sheet-table .col-post {
   width: 160px;
 }
-.sheet-table .col-sent {
+.sheet-table .col-sent,
+.sheet-table .col-confirmed,
+.sheet-table .col-replied {
   width: 92px;
   white-space: nowrap;
 }

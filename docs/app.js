@@ -184,7 +184,13 @@ function isReapproachEligible(c) {
 
 function stageLabelOf(c) {
   if (isReapproachEligible(c)) return "재발송";
-  return STAGE_LABELS[stageOf(c)] || stageOf(c);
+  const st = stageOf(c);
+  if (st === "mailed") {
+    if (c.replied_at || c.repliedAt) return STAGE_LABELS.replied;
+    if (c.confirmed_at || c.confirmedAt) return "읽음";
+    return "발송";
+  }
+  return STAGE_LABELS[st] || st;
 }
 
 function displayMemoOf(c) {
@@ -394,6 +400,8 @@ function stubCompanyFromMgmt(id, m, edit = {}) {
     status: m.status || "active",
     mail_status: m.mailStatus || "none",
     mailed_at: m.mailedAt || null,
+    confirmed_at: m.confirmedAt || null,
+    replied_at: m.repliedAt || null,
     memo: m.memo || "",
     recommend_score: m.recommendScore ?? 0,
     closed_reason: m.closedReason || "",
@@ -436,6 +444,8 @@ function rebuildActiveCompanies() {
           status: offer.status || base.status,
           mail_status: offer.mail_status || base.mail_status,
           mailed_at: offer.mailed_at || base.mailed_at,
+          confirmed_at: offer.confirmed_at || base.confirmed_at,
+          replied_at: offer.replied_at || base.replied_at,
           memo: offer.memo || base.memo,
           recommend_score: offer.recommend_score ?? base.recommend_score,
           closed_reason: offer.closed_reason || base.closed_reason,
@@ -607,6 +617,8 @@ function mapClientRow(row, offerMap) {
     status: offer.status || mgmt.status || "active",
     mail_status: offer.mail_status || mgmt.mailStatus || "none",
     mailed_at: offer.mailed_at || mgmt.mailedAt || null,
+    confirmed_at: offer.confirmed_at || mgmt.confirmedAt || null,
+    replied_at: offer.replied_at || mgmt.repliedAt || null,
     memo: offer.memo || mgmt.memo || "",
     recommend_score: offer.recommend_score ?? mgmt.recommendScore ?? 0,
     closed_reason: offer.closed_reason || mgmt.closedReason || "",
@@ -808,6 +820,8 @@ function applyLocalPatch(c, patch) {
   if (patch.recommendScore != null) c.recommend_score = patch.recommendScore;
   if (patch.closedReason != null) c.closed_reason = patch.closedReason;
   if (patch.mailedAt != null) c.mailed_at = patch.mailedAt;
+  if (patch.confirmedAt != null) c.confirmed_at = patch.confirmedAt;
+  if (patch.repliedAt != null) c.replied_at = patch.repliedAt;
   if (patch.status != null) c.status = patch.status;
 }
 
@@ -822,6 +836,8 @@ function applyRpcOut(c, out) {
   if (out.recommendScore != null) c.recommend_score = out.recommendScore;
   if (out.closedReason != null) c.closed_reason = out.closedReason;
   if (out.mailedAt != null) c.mailed_at = out.mailedAt;
+  if (out.confirmedAt != null) c.confirmed_at = out.confirmedAt;
+  if (out.repliedAt != null) c.replied_at = out.repliedAt;
   if (out.status != null) c.status = out.status;
 }
 
@@ -1810,12 +1826,38 @@ function memoOf(c) {
 }
 
 function mailedAtOf(c) {
-  const raw = c.mailed_at || c.mailedAt || "";
+  return formatSheetDate(c.mailed_at || c.mailedAt);
+}
+
+function confirmedAtOf(c) {
+  return formatSheetDateTime(c.confirmed_at || c.confirmedAt);
+}
+
+function repliedAtOf(c) {
+  return formatSheetDateTime(c.replied_at || c.repliedAt);
+}
+
+function formatSheetDate(raw) {
   if (!raw) return "";
   try {
     return new Date(raw).toLocaleDateString("ko-KR");
   } catch {
     return `${raw}`.slice(0, 10);
+  }
+}
+
+function formatSheetDateTime(raw) {
+  if (!raw) return "";
+  try {
+    return new Date(raw).toLocaleString("ko-KR", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  } catch {
+    return `${raw}`.slice(0, 16);
   }
 }
 
@@ -1835,6 +1877,8 @@ function sheetRowOf(c, index) {
     post: title || "-",
     postUrl: url,
     mailedAt: mailedAtOf(c),
+    confirmedAt: confirmedAtOf(c),
+    repliedAt: repliedAtOf(c),
     stage: stageLabelOf(c),
     stageReapproach: reapproach,
     memo: displayMemoOf(c),
@@ -1857,22 +1901,22 @@ function exportSheetCsv() {
     .slice()
     .reverse();
   const excluded = (state.companies || []).filter((c) => isExcluded(c)).slice().reverse();
-  const headers = ["#", "업체명", "사업자 번호", "홈페이지", "업종", "담당자 정보", "공고", "발송일", "상태", "비고", "메일"];
+  const headers = ["#", "업체명", "사업자 번호", "홈페이지", "업종", "담당자 정보", "공고", "발송일", "확인일", "답변일", "상태", "비고", "메일"];
   const lines = [headers.map(csvEscape).join(",")];
   active.forEach((c, i) => {
     const r = sheetRowOf(c, i + 1);
     lines.push(
-      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.stage, r.memo, r.mail]
+      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.confirmedAt, r.repliedAt, r.stage, r.memo, r.mail]
         .map(csvEscape)
         .join(",")
     );
   });
   lines.push("");
-  lines.push(["제외", "", "", "", "", "", "", "", "", "", ""].map(csvEscape).join(","));
+  lines.push(["제외", "", "", "", "", "", "", "", "", "", "", "", ""].map(csvEscape).join(","));
   excluded.forEach((c, i) => {
     const r = sheetRowOf(c, i + 1);
     lines.push(
-      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.stage, r.memo, r.mail]
+      [r.no, r.name, r.bizNo, r.homepage, r.industry, r.contact, r.post, r.mailedAt, r.confirmedAt, r.repliedAt, r.stage, r.memo, r.mail]
         .map(csvEscape)
         .join(",")
     );
@@ -1938,6 +1982,8 @@ function renderCompanies() {
         <td class="cell-clip col-contact">${escapeHtml(r.contact || "—")}</td>
         <td class="cell-clip col-post">${postCell}</td>
         <td class="col-sent">${escapeHtml(r.mailedAt || "—")}</td>
+        <td class="col-confirmed">${escapeHtml(r.confirmedAt || "—")}</td>
+        <td class="col-replied">${escapeHtml(r.repliedAt || "—")}</td>
         <td class="col-stage${r.stageReapproach ? " stage-reapproach" : ""}">${
           r.stageReapproach
             ? `<span class="badge badge-reapproach">${escapeHtml(r.stage)}</span>`
@@ -2087,13 +2133,17 @@ async function load() {
           }
         }
         persistAlbaTagState();
-        for (const c of state.allCompanies) {
+        for (const c of [...state.allCompanies, ...state.offerCompanies]) {
           const m = state.offerMgmt[c.company_id];
+          if (!m) continue;
           if (m?.isAlba != null) c.is_alba = !!m.isAlba;
           if (m?.isRecommended != null) c.is_recommended = !!m.isRecommended;
           if (m?.isHidden != null) c.is_hidden = !!m.isHidden;
           if (m?.stage) c.stage = m.stage;
           if (m?.mailStatus) c.mail_status = m.mailStatus;
+          if (m?.mailedAt) c.mailed_at = m.mailedAt;
+          if (m?.confirmedAt) c.confirmed_at = m.confirmedAt;
+          if (m?.repliedAt) c.replied_at = m.repliedAt;
           if (m?.memo != null) c.memo = m.memo;
           if (m?.closedReason != null) c.closed_reason = m.closedReason;
         }
