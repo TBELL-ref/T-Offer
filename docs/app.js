@@ -1736,10 +1736,12 @@ function setView(view) {
 function syncProgressFilterTabs() {
   const show = state.view === "companies" && state.tab === "progress";
   $("#progressFilterTabs")?.classList.toggle("hidden", !show);
+  $("#progressCharts")?.classList.toggle("hidden", !show);
   if (!show) return;
   document.querySelectorAll("[data-progress-filter]").forEach((b) => {
     b.classList.toggle("active", b.getAttribute("data-progress-filter") === state.progressFilter);
   });
+  renderProgressCharts();
 }
 
 function switchTab(tab) {
@@ -2039,6 +2041,196 @@ function renderPosts() {
 function renderList() {
   if (state.view === "posts") renderPosts();
   else renderCompanies();
+  if (state.view === "companies" && state.tab === "progress") renderProgressCharts();
+  else $("#progressCharts")?.classList.add("hidden");
+}
+
+function kstDateKey(raw) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (!Number.isFinite(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(d);
+}
+
+function kstTodayKey() {
+  return kstDateKey(new Date().toISOString());
+}
+
+function shiftKstDateKey(key, deltaDays) {
+  const [y, m, d] = key.split("-").map(Number);
+  const utc = Date.UTC(y, m - 1, d + deltaDays, 12, 0, 0);
+  return kstDateKey(new Date(utc).toISOString());
+}
+
+function progressMailedPool() {
+  return (state.companies || []).filter((c) => isProgress(c) && (mailedAtMs(c) || isProgressSent(c)));
+}
+
+function progressMailFunnel() {
+  const pool = progressMailedPool();
+  let read = 0;
+  let replied = 0;
+  let unread = 0;
+  for (const c of pool) {
+    if (c.replied_at || c.repliedAt || stageOf(c) === "replied" || stageOf(c) === "meeting" || stageOf(c) === "won") {
+      replied += 1;
+    } else if (c.confirmed_at || c.confirmedAt) {
+      read += 1;
+    } else {
+      unread += 1;
+    }
+  }
+  return { total: pool.length, read, replied, unread };
+}
+
+function progressDailySeries(days = 14) {
+  const end = kstTodayKey();
+  const keys = [];
+  for (let i = days - 1; i >= 0; i -= 1) keys.push(shiftKstDateKey(end, -i));
+  const sent = Object.fromEntries(keys.map((k) => [k, 0]));
+  const read = Object.fromEntries(keys.map((k) => [k, 0]));
+  for (const c of state.companies || []) {
+    if (!isProgress(c) && !mailedAtMs(c)) continue;
+    const sentKey = kstDateKey(c.mailed_at || c.mailedAt);
+    if (sentKey && sent[sentKey] != null) sent[sentKey] += 1;
+    const readKey = kstDateKey(c.confirmed_at || c.confirmedAt);
+    if (readKey && read[readKey] != null) read[readKey] += 1;
+  }
+  return {
+    keys,
+    sent: keys.map((k) => sent[k]),
+    read: keys.map((k) => read[k])
+  };
+}
+
+function donutArcs(parts, cx, cy, r, thickness) {
+  const total = parts.reduce((s, p) => s + p.value, 0) || 1;
+  let angle = -Math.PI / 2;
+  const outer = r;
+  const inner = r - thickness;
+  return parts.map((p) => {
+    const sweep = (p.value / total) * Math.PI * 2;
+    const a0 = angle;
+    const a1 = angle + sweep;
+    angle = a1;
+    if (p.value <= 0) return { ...p, d: "" };
+    const large = sweep > Math.PI ? 1 : 0;
+    const x0o = cx + outer * Math.cos(a0);
+    const y0o = cy + outer * Math.sin(a0);
+    const x1o = cx + outer * Math.cos(a1);
+    const y1o = cy + outer * Math.sin(a1);
+    const x0i = cx + inner * Math.cos(a1);
+    const y0i = cy + inner * Math.sin(a1);
+    const x1i = cx + inner * Math.cos(a0);
+    const y1i = cy + inner * Math.sin(a0);
+    const d = [
+      `M ${x0o} ${y0o}`,
+      `A ${outer} ${outer} 0 ${large} 1 ${x1o} ${y1o}`,
+      `L ${x0i} ${y0i}`,
+      `A ${inner} ${inner} 0 ${large} 0 ${x1i} ${y1i}`,
+      "Z"
+    ].join(" ");
+    return { ...p, d };
+  });
+}
+
+function renderProgressDonut(funnel) {
+  const svg = $("#progressDonutSvg");
+  const legend = $("#progressDonutLegend");
+  const totalEl = $("#progressDonutTotal");
+  const sub = $("#progressDonutSub");
+  if (!svg || !legend || !totalEl) return;
+  const parts = [
+    { key: "read", label: "읽음", value: funnel.read, color: "#0ea5e9", swatch: "swatch-read" },
+    { key: "replied", label: "답변", value: funnel.replied, color: "#059669", swatch: "swatch-replied" },
+    { key: "unread", label: "안읽음", value: funnel.unread, color: "#94a3b8", swatch: "swatch-unread" }
+  ];
+  totalEl.textContent = String(funnel.total);
+  if (sub) sub.textContent = funnel.total ? `발송 ${funnel.total}건 기준` : "발송 건 없음";
+  const arcs = donutArcs(parts, 80, 80, 68, 18);
+  if (!funnel.total) {
+    svg.innerHTML = `<circle cx="80" cy="80" r="59" fill="none" stroke="#e8ebee" stroke-width="18" />`;
+  } else {
+    svg.innerHTML = arcs
+      .filter((a) => a.d)
+      .map((a) => `<path d="${a.d}" fill="${a.color}"><title>${a.label} ${a.value}</title></path>`)
+      .join("");
+  }
+  legend.innerHTML = parts
+    .map(
+      (p) =>
+        `<li><i class="swatch ${p.swatch}"></i>${p.label} <b>${p.value}</b><span class="detail-muted">(${
+          funnel.total ? Math.round((p.value / funnel.total) * 100) : 0
+        }%)</span></li>`
+    )
+    .join("");
+}
+
+function renderProgressLine(series) {
+  const svg = $("#progressLineSvg");
+  if (!svg) return;
+  const W = 560;
+  const H = 220;
+  const pad = { t: 18, r: 16, b: 36, l: 36 };
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+  const n = series.keys.length || 1;
+  const maxY = Math.max(1, ...series.sent, ...series.read);
+  const yTicks = 4;
+  const xAt = (i) => pad.l + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const yAt = (v) => pad.t + plotH - (v / maxY) * plotH;
+  const linePath = (arr) =>
+    arr
+      .map((v, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`)
+      .join(" ");
+  const grid = [];
+  for (let i = 0; i <= yTicks; i += 1) {
+    const v = Math.round((maxY * i) / yTicks);
+    const y = yAt(v);
+    grid.push(
+      `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="#eef1f4" stroke-width="1" />`,
+      `<text x="${pad.l - 8}" y="${y + 3}" text-anchor="end" fill="#8b95a1" font-size="10">${v}</text>`
+    );
+  }
+  const labels = series.keys.map((k, i) => {
+    if (i !== 0 && i !== n - 1 && i % 2 === 1 && n > 8) return "";
+    const md = k.slice(5).replace("-", "/");
+    return `<text x="${xAt(i)}" y="${H - 12}" text-anchor="middle" fill="#8b95a1" font-size="10">${md}</text>`;
+  });
+  const dots = (arr, color) =>
+    arr
+      .map((v, i) =>
+        v > 0
+          ? `<circle cx="${xAt(i)}" cy="${yAt(v)}" r="3" fill="${color}"><title>${series.keys[i]}: ${v}</title></circle>`
+          : ""
+      )
+      .join("");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = [
+    ...grid,
+    `<path d="${linePath(series.sent)}" fill="none" stroke="#0284c7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />`,
+    `<path d="${linePath(series.read)}" fill="none" stroke="#0ea5e9" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />`,
+    dots(series.sent, "#0284c7"),
+    dots(series.read, "#0ea5e9"),
+    ...labels
+  ].join("");
+}
+
+function renderProgressCharts() {
+  const root = $("#progressCharts");
+  if (!root) return;
+  if (!(state.view === "companies" && state.tab === "progress")) {
+    root.classList.add("hidden");
+    return;
+  }
+  root.classList.remove("hidden");
+  renderProgressDonut(progressMailFunnel());
+  renderProgressLine(progressDailySeries(14));
 }
 
 async function loadOfferData() {

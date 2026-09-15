@@ -98,6 +98,36 @@
       <div id="status" class="status">…</div>
     </div>
 
+    <section id="progressCharts" class="progress-charts hidden" aria-label="진행 현황 그래프">
+      <div class="progress-chart-card">
+        <div class="progress-chart-head">
+          <h2 class="progress-chart-title">열람·답변 비율</h2>
+          <p class="progress-chart-sub" id="progressDonutSub">발송 건 기준</p>
+        </div>
+        <div class="progress-donut-wrap">
+          <svg id="progressDonutSvg" class="progress-donut-svg" viewBox="0 0 160 160" aria-hidden="true"></svg>
+          <div class="progress-donut-center">
+            <strong id="progressDonutTotal">0</strong>
+            <span>발송</span>
+          </div>
+        </div>
+        <ul class="progress-donut-legend" id="progressDonutLegend"></ul>
+      </div>
+      <div class="progress-chart-card progress-chart-wide">
+        <div class="progress-chart-head">
+          <h2 class="progress-chart-title">일별 발송·읽음</h2>
+          <p class="progress-chart-sub">최근 14일 (KST)</p>
+        </div>
+        <div class="progress-line-wrap">
+          <svg id="progressLineSvg" class="progress-line-svg" viewBox="0 0 560 220" role="img" aria-label="일별 발송·읽음 추이"></svg>
+        </div>
+        <ul class="progress-line-legend">
+          <li><i class="swatch swatch-sent"></i>발송</li>
+          <li><i class="swatch swatch-read"></i>읽음</li>
+        </ul>
+      </div>
+    </section>
+
     <div class="table-wrap">
       <table class="leads-table sheet-table" id="companyTable" aria-label="Offer 회사">
         <thead>
